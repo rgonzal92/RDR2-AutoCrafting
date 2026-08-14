@@ -30,6 +30,7 @@ namespace
 	int skipped_frame = -1;
 	int remaining_batch_crafts = 0;
 	bool force_safe_breakout = false;
+	bool batch_popup_shown = false;
 	rage::scrThread** current_script_thread = nullptr;
 
 	using GetNativeHandler = rage::scrNativeHandler(*)(rage::scrNativeHash hash);
@@ -344,6 +345,7 @@ namespace
 				&& *ctx->get_return_value<BOOL>()) {
 				remaining_batch_crafts = kCraftBatchLimit;
 				force_safe_breakout = false;
+				batch_popup_shown = false;
 			}
 		});
 
@@ -371,7 +373,7 @@ namespace
 			}
 		});
 		NHOOK("_ADD_AMMO_TO_PED_BY_TYPE", 0x106A811C6D3035F3, {
-			if (!IsCraftingScript() || remaining_batch_crafts <= 0) {
+			if (!IsCraftingScript()) {
 				CALL();
 				return;
 			}
@@ -381,12 +383,32 @@ namespace
 			const int before_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
 			CALL();
 			const int after_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
-			if (after_count > before_count) {
-				--remaining_batch_crafts;
-				if (remaining_batch_crafts == 0) {
-					force_safe_breakout = true;
-				}
+			if (after_count <= before_count) {
+				return;
 			}
+
+			if (remaining_batch_crafts > 0) {
+				--remaining_batch_crafts;
+			}
+			else {
+				remaining_batch_crafts = kCraftBatchLimit - 1;
+				batch_popup_shown = false;
+			}
+
+			if (remaining_batch_crafts == 0) {
+				force_safe_breakout = true;
+			}
+		});
+
+		NHOOK("_UI_FEED_POST_SAMPLE_TOAST_RIGHT", 0xB249EBCB30DD88E0, {
+			if (IsCraftingScript() && (remaining_batch_crafts > 0 || force_safe_breakout)) {
+				if (batch_popup_shown) {
+					ctx->set_return_value<int>(0);
+					return;
+				}
+				batch_popup_shown = true;
+			}
+			CALL();
 		});
 	}
 #endif
