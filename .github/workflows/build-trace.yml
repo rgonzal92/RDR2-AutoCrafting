@@ -2,6 +2,9 @@ name: Build AutoCraft Trace
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - prototype/fast-safe-crafting
 
 permissions:
   contents: read
