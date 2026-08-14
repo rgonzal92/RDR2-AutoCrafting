@@ -10,7 +10,6 @@
 #include "rage.hpp"
 #include "scanner.hpp"
 
-#include <limits>
 #include <optional>
 #include <string_view>
 
@@ -20,13 +19,16 @@
 
 namespace
 {
-	constexpr int kCraftMultiplier = 10;
+	constexpr int kCraftBatchLimit = 10;
+	constexpr float kCraftAnimationRate = 5.0f;
 	constexpr Hash kCraftingScript = 0x38EB3D5B;
 	constexpr Hash kCraftingMenuScript = 0xA64E7B5F;
 	constexpr Hash kCraftingHudContext = 0xE3FEFB3D;
 
 	Prompt tracked_crafting_prompt = 0;
 	int skipped_frame = -1;
+	int successful_batch_crafts = 0;
+	bool auto_batch_active = false;
 	rage::scrThread** current_script_thread = nullptr;
 
 	using GetNativeHandler = rage::scrNativeHandler(*)(rage::scrNativeHash hash);
@@ -268,20 +270,21 @@ namespace
 		});
 	}
 #else
-	bool HasCompletedAutoCraftPrompt(rage::scrNativeCallContext* ctx)
+	bool ShouldContinueAutoBatch(rage::scrNativeCallContext* ctx)
 	{
 		const auto prompt = ctx->get_arg<Prompt>(0);
-		return tracked_crafting_prompt != 0
-			&& prompt == tracked_crafting_prompt
-			&& HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt);
-	}
-
-	constexpr int ScaleCraftAmount(int amount) noexcept
-	{
-		if (amount <= 0 || amount > (std::numeric_limits<int>::max)() / kCraftMultiplier) {
-			return amount;
+		if (tracked_crafting_prompt == 0 || prompt != tracked_crafting_prompt) {
+			return false;
 		}
-		return amount * kCraftMultiplier;
+
+		if (!HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt)) {
+			auto_batch_active = false;
+			successful_batch_crafts = 0;
+			return false;
+		}
+
+		auto_batch_active = successful_batch_crafts < kCraftBatchLimit;
+		return auto_batch_active;
 	}
 
 	void InitializeNormalHooks()
@@ -297,7 +300,12 @@ namespace
 			if (IsCraftingScript() && skipped_frame != MISC::GET_FRAME_COUNT()) {
 				const char* prompt_text = ctx->get_arg<const char*>(1);
 				if (prompt_text != nullptr && IsCraftingPromptText(prompt_text)) {
-					tracked_crafting_prompt = ctx->get_arg<Prompt>(0);
+					const Prompt prompt = ctx->get_arg<Prompt>(0);
+					if (prompt != tracked_crafting_prompt) {
+						tracked_crafting_prompt = prompt;
+						successful_batch_crafts = 0;
+						auto_batch_active = false;
+					}
 				}
 			}
 			CALL();
@@ -312,7 +320,7 @@ namespace
 		});
 
 		NHOOK("_UI_PROMPT_IS_JUST_PRESSED", 0x2787CC611D3FACC5, {
-			if (IsCraftingScript() && HasCompletedAutoCraftPrompt(ctx)) {
+			if (IsCraftingScript() && ShouldContinueAutoBatch(ctx)) {
 				ctx->set_return_value<bool>(true);
 				return;
 			}
@@ -320,39 +328,42 @@ namespace
 		});
 
 		NHOOK("_UI_PROMPT_IS_PRESSED", 0x21E60E230086697F, {
-			if (IsCraftingScript() && HasCompletedAutoCraftPrompt(ctx)) {
+			if (IsCraftingScript() && ShouldContinueAutoBatch(ctx)) {
 				ctx->set_return_value<bool>(true);
 				return;
 			}
 			CALL();
 		});
 
-		NHOOK("_INVENTORY_ADD_ITEM_WITH_GUID", 0xCB5D11F9508A928D, {
-			if (IsCraftingScript()) {
-				ctx->set_arg<int>(5, ScaleCraftAmount(ctx->get_arg<int>(5)));
-			}
-			CALL();
-		});
-
-		NHOOK("_INVENTORY_REMOVE_INVENTORY_ITEM_WITH_ITEMID", 0xB4158C8C9A3B5DCE, {
-			if (IsCraftingScript()) {
-				ctx->set_arg<int>(2, ScaleCraftAmount(ctx->get_arg<int>(2)));
-			}
-			CALL();
-		});
-
-		NHOOK("_REMOVE_AMMO_FROM_PED_BY_TYPE", 0xB6CFEC32E3742779, {
-			if (IsCraftingScript()) {
-				ctx->set_arg<int>(2, ScaleCraftAmount(ctx->get_arg<int>(2)));
+		NHOOK("HAS_ENTITY_EXITED_ANIM_SCENE", 0xB89FCFF19DAFFF28, {
+			const char* entity_name = ctx->get_arg<const char*>(1);
+			if (IsCraftingScript()
+				&& auto_batch_active
+				&& successful_batch_crafts < kCraftBatchLimit
+				&& entity_name != nullptr
+				&& std::string_view(entity_name) == "player") {
+				ANIMSCENE::SET_ANIM_SCENE_RATE(ctx->get_arg<AnimScene>(0), kCraftAnimationRate);
 			}
 			CALL();
 		});
 
 		NHOOK("_ADD_AMMO_TO_PED_BY_TYPE", 0x106A811C6D3035F3, {
-			if (IsCraftingScript()) {
-				ctx->set_arg<int>(2, ScaleCraftAmount(ctx->get_arg<int>(2)));
+			if (!IsCraftingScript() || !auto_batch_active || successful_batch_crafts >= kCraftBatchLimit) {
+				CALL();
+				return;
 			}
+
+			const Ped ped = ctx->get_arg<Ped>(0);
+			const Hash ammo_type = ctx->get_arg<Hash>(1);
+			const int before_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
 			CALL();
+			const int after_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
+			if (after_count > before_count) {
+				++successful_batch_crafts;
+				if (successful_batch_crafts >= kCraftBatchLimit) {
+					auto_batch_active = false;
+				}
+			}
 		});
 	}
 #endif
