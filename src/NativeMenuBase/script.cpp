@@ -10,6 +10,7 @@
 #include "rage.hpp"
 #include "scanner.hpp"
 
+#include <array>
 #include <optional>
 #include <string_view>
 
@@ -31,6 +32,15 @@ namespace
 	int remaining_batch_crafts = 0;
 	bool force_safe_breakout = false;
 	bool batch_popup_shown = false;
+
+	struct IngredientCountBinding
+	{
+		Any context = 0;
+		int count = 0;
+	};
+
+	std::array<IngredientCountBinding, 4> ingredient_count_bindings{};
+	bool refreshing_ingredient_binding = false;
 	rage::scrThread** current_script_thread = nullptr;
 
 	using GetNativeHandler = rage::scrNativeHandler(*)(rage::scrNativeHash hash);
@@ -317,8 +327,45 @@ namespace
 		});
 	}
 #else
+	void TrackIngredientCountBinding(Any context, int count)
+	{
+		for (auto& binding : ingredient_count_bindings) {
+			if (binding.context == context || binding.context == 0) {
+				binding.context = context;
+				binding.count = count;
+				return;
+			}
+		}
+	}
+
+	void RefreshRemovedIngredientCount(int before_count, int after_count)
+	{
+		for (auto& binding : ingredient_count_bindings) {
+			if (binding.context == 0 || binding.count != before_count) {
+				continue;
+			}
+
+			refreshing_ingredient_binding = true;
+			DATABINDING::_DATABINDING_WRITE_DATA_INT_FROM_PARENT(binding.context, "count", after_count);
+			refreshing_ingredient_binding = false;
+			binding.count = after_count;
+			return;
+		}
+	}
 	void InitializeNormalHooks()
 	{
+		NHOOK("_DATABINDING_WRITE_DATA_INT_FROM_PARENT", 0x9EFA98238BA08FC4, {
+			const Any context = ctx->get_arg<Any>(0);
+			const char* field = ctx->get_arg<const char*>(1);
+			const int value = ctx->get_arg<int>(2);
+			CALL();
+			if (IsCraftingScript()
+				&& !refreshing_ingredient_binding
+				&& field != nullptr
+				&& std::string_view(field) == "count") {
+				TrackIngredientCountBinding(context, value);
+			}
+		});
 		NHOOK("_ENABLE_HUD_CONTEXT_THIS_FRAME", 0xC9CAEAEEC1256E54, {
 			if (IsCraftingScript() && ctx->get_arg<Hash>(0) == kCraftingHudContext) {
 				skipped_frame = MISC::GET_FRAME_COUNT();
@@ -370,6 +417,22 @@ namespace
 			if (IsCraftingScript() && remaining_batch_crafts > 0) {
 				remaining_batch_crafts = 0;
 				force_safe_breakout = true;
+			}
+		});
+
+		NHOOK("_REMOVE_AMMO_FROM_PED_BY_TYPE", 0xB6CFEC32E3742779, {
+			if (!IsCraftingScript()) {
+				CALL();
+				return;
+			}
+
+			const Ped ped = ctx->get_arg<Ped>(0);
+			const Hash ammo_type = ctx->get_arg<Hash>(1);
+			const int before_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
+			CALL();
+			const int after_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
+			if (after_count < before_count) {
+				RefreshRemovedIngredientCount(before_count, after_count);
 			}
 		});
 		NHOOK("_ADD_AMMO_TO_PED_BY_TYPE", 0x106A811C6D3035F3, {
