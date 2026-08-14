@@ -268,6 +268,51 @@ namespace
 			record.capacity = QueryAmmoCapacity(ped, ammo_type);
 			diagnostic::Write(record);
 		});
+
+		NHOOK("HAS_ANIM_EVENT_FIRED", 0x5851CC48405F4A07, {
+			if (!IsCraftingScript() || diagnostic::IsInternalQuery()) {
+				CALL();
+				return;
+			}
+
+			const Entity entity = ctx->get_arg<Entity>(0);
+			const Hash event_hash = ctx->get_arg<Hash>(1);
+			CALL();
+			const BOOL fired = *ctx->get_return_value<BOOL>();
+			if (fired || event_hash == static_cast<Hash>(-61921192)) {
+				auto record = MakeRecord("ANIM_EVENT");
+				record.owner_id = entity;
+				record.subject_hash = event_hash;
+				record.result = fired ? 1 : 0;
+				diagnostic::Write(record);
+			}
+		});
+
+		NHOOK("HAS_ENTITY_EXITED_ANIM_SCENE", 0xB89FCFF19DAFFF28, {
+			if (!IsCraftingScript() || diagnostic::IsInternalQuery()) {
+				CALL();
+				return;
+			}
+
+			const AnimScene scene = ctx->get_arg<AnimScene>(0);
+			const char* entity_name = ctx->get_arg<const char*>(1);
+			CALL();
+			auto record = MakeRecord("ANIM_SCENE_EXIT");
+			record.owner_id = scene;
+			record.text = entity_name != nullptr ? entity_name : "";
+			record.result = *ctx->get_return_value<BOOL>() ? 1 : 0;
+			diagnostic::Write(record);
+		});
+
+		NHOOK("SET_ANIM_SCENE_RATE", 0x75820B801CFF262A, {
+			if (IsCraftingScript() && !diagnostic::IsInternalQuery()) {
+				auto record = MakeRecord("ANIM_SCENE_RATE");
+				record.owner_id = ctx->get_arg<AnimScene>(0);
+				record.quantity = static_cast<int>(ctx->get_arg<float>(1) * 1000.0f);
+				diagnostic::Write(record);
+			}
+			CALL();
+		});
 	}
 #else
 	bool ShouldContinueAutoBatch(rage::scrNativeCallContext* ctx)

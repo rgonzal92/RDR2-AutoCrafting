@@ -9,6 +9,10 @@ record includes the call sequence, frame, script and thread, native arguments,
 before/after counts, and the original result when available. The file is
 truncated each time the game starts and flushed after every record.
 
+Animation investigation records include `ANIM_EVENT`, `ANIM_SCENE_EXIT`, and
+`ANIM_SCENE_RATE`. For rate records, `quantity` stores the requested rate times
+1,000 (for example, `5000` means 5×). These hooks remain logging-only.
+
 ## Safety
 
 - Keep only `AutoCraftDiagnostic.asi` active while collecting traces.
