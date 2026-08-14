@@ -55,7 +55,7 @@ namespace
 
 	constexpr int ScaleCraftAmount(int amount) noexcept
 	{
-		if (amount <= 0 || amount > std::numeric_limits<int>::max() / kCraftMultiplier) {
+		if (amount <= 0 || amount > (std::numeric_limits<int>::max)() / kCraftMultiplier) {
 			return amount;
 		}
 
