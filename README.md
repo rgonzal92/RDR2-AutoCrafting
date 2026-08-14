@@ -1,15 +1,17 @@
 # RDR2 AutoCrafting Mod
 
-Automatically fills the **Craft Another** and **Stow** prompts. AutoCraft is
-always enabled and has no custom menu or keyboard shortcut.
+One ammunition craft can run up to 50 of RDR2's normal crafting transactions
+without waiting for each repeated animation. Every transaction is validated by
+the game, consumes its required ingredients, and stops when ingredients run out
+or ammunition reaches capacity. Non-ammunition recipes still craft once.
 
-Crafting quantities are multiplied by 10 for both outputs and required inputs.
-RDR2 remains responsible for applying its inventory and ingredient limits.
+AutoCraft is always enabled and has no custom menu or keyboard shortcut. One
+inventory notification is shown for each ammunition batch.
 
 ## Build
 
 Run the **Build AutoCraft** workflow from the repository's Actions page. The
-Windows Release x64 build is uploaded as the `AutoCraft-10x` artifact and
+Windows Release x64 build is uploaded as the `AutoCraft-ammo-50` artifact and
 contains `AutoCraft.asi`.
 
 ## Original mod

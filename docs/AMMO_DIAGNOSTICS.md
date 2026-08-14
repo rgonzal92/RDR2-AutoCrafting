@@ -15,8 +15,9 @@ Animation investigation records include `ANIM_EVENT`, `ANIM_SCENE_EXIT`, and
 
 `CRAFT_GLOBALS` is a read-only build-1491 check for the proposed menu-refresh
 flag. `before_count` contains the recipe count, `subject_hash` contains the
-selected recipe hash, and `result` contains the refresh flag. The diagnostic
-never writes to these globals.
+external preselected-recipe request, and `result` contains the refresh flag.
+The script normally consumes and clears the preselection request, so zero is
+expected during menu use. The diagnostic never writes to these globals.
 
 ## Safety
 

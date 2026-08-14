@@ -26,12 +26,15 @@ namespace
 	constexpr Hash kCraftingMenuScript = 0xA64E7B5F;
 	constexpr Hash kCraftingHudContext = 0xE3FEFB3D;
 	constexpr int kCraftRecipeCountGlobal = 1913490;
-	constexpr int kCraftSelectedRecipeGlobal = 1913491;
+	constexpr int kCraftPreselectedRecipeGlobal = 1913491;
 	constexpr int kCraftMenuRefreshGlobal = 1913494;
+	constexpr int kCraftMenuRefreshDelayFrames = 2;
 
 	Prompt tracked_crafting_prompt = 0;
 	int skipped_frame = -1;
 	int remaining_batch_crafts = 0;
+	int completed_batch_crafts = 0;
+	int menu_refresh_frame = -1;
 	bool force_safe_breakout = false;
 	bool batch_popup_shown = false;
 	rage::scrThread** current_script_thread = nullptr;
@@ -60,6 +63,27 @@ namespace
 			|| text == "CRAFT_FASTER"
 			|| text == "CAMP_REC_MAKE_AGN"
 			|| text == "CAMP_REC_MAKE";
+	}
+
+	void FinishBatch()
+	{
+		remaining_batch_crafts = 0;
+		if (completed_batch_crafts > 1) {
+			menu_refresh_frame = MISC::GET_FRAME_COUNT() + kCraftMenuRefreshDelayFrames;
+		}
+		completed_batch_crafts = 0;
+	}
+
+	void RefreshCraftingMenuWhenReady()
+	{
+		if (menu_refresh_frame < 0 || MISC::GET_FRAME_COUNT() < menu_refresh_frame) {
+			return;
+		}
+
+		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
+			*refresh_flag = 1;
+		}
+		menu_refresh_frame = -1;
 	}
 
 #if AUTOCRAFT_DIAGNOSTIC
@@ -285,7 +309,7 @@ namespace
 			const int frame = MISC::GET_FRAME_COUNT();
 			if (frame - last_global_trace_frame >= 60) {
 				const auto recipe_count = getGlobalPtr(kCraftRecipeCountGlobal);
-				const auto selected_recipe = getGlobalPtr(kCraftSelectedRecipeGlobal);
+				const auto selected_recipe = getGlobalPtr(kCraftPreselectedRecipeGlobal);
 				const auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal);
 				if (recipe_count != nullptr && selected_recipe != nullptr && refresh_flag != nullptr) {
 					auto record = MakeRecord("CRAFT_GLOBALS");
@@ -364,6 +388,8 @@ namespace
 				&& prompt == tracked_crafting_prompt
 				&& *ctx->get_return_value<BOOL>()) {
 				remaining_batch_crafts = kCraftBatchLimit;
+				completed_batch_crafts = 0;
+				menu_refresh_frame = -1;
 				force_safe_breakout = false;
 				batch_popup_shown = false;
 			}
@@ -375,13 +401,20 @@ namespace
 			if (!IsCraftingScript()) {
 				return;
 			}
+			RefreshCraftingMenuWhenReady();
 
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				ctx->set_return_value<BOOL>(true);
 			}
-			else if (event_hash == kSafeBreakoutEvent && force_safe_breakout) {
-				ctx->set_return_value<BOOL>(true);
-				force_safe_breakout = false;
+			else if (event_hash == kSafeBreakoutEvent) {
+				const bool breakout_fired = *ctx->get_return_value<BOOL>() != 0;
+				if (force_safe_breakout) {
+					ctx->set_return_value<BOOL>(true);
+				}
+				if (breakout_fired || force_safe_breakout) {
+					force_safe_breakout = false;
+					FinishBatch();
+				}
 			}
 		});
 
@@ -389,6 +422,7 @@ namespace
 			CALL();
 			if (IsCraftingScript() && remaining_batch_crafts > 0) {
 				remaining_batch_crafts = 0;
+				completed_batch_crafts = 0;
 				force_safe_breakout = true;
 			}
 		});
@@ -406,6 +440,7 @@ namespace
 			if (after_count <= before_count) {
 				return;
 			}
+			++completed_batch_crafts;
 
 			if (remaining_batch_crafts > 0) {
 				--remaining_batch_crafts;
