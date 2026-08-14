@@ -40,6 +40,9 @@ namespace
 	int completed_batch_crafts = 0;
 	bool pending_menu_refresh = false;
 	bool force_safe_breakout = false;
+	// RDR2 reports safetobreakout after every successful craft animation. This
+	// distinguishes that normal per-craft signal from a failed craft attempt.
+	bool craft_succeeded_since_safe_breakout = false;
 	bool batch_popup_shown = false;
 	rage::scrThread** current_script_thread = nullptr;
 
@@ -125,6 +128,11 @@ namespace
 	{
 		TRACE_BATCH("BATCH_FINISH_BEGIN");
 		remaining_batch_crafts = 0;
+		force_safe_breakout = false;
+		craft_succeeded_since_safe_breakout = false;
+
+		// A single craft already refreshes the recipe menu. Request a rebuild only
+		// when RDR2 committed additional transactions inside the same menu action.
 		if (completed_batch_crafts > 1) {
 			pending_menu_refresh = true;
 		}
@@ -444,9 +452,6 @@ namespace
 				TRACE_BATCH("BATCH_PROMPT_QUERY", std::nullopt, pressed ? 1 : 0, prompt);
 			}
 			if (prompt == recipe_menu_prompt && !pressed) {
-				if (remaining_batch_crafts > 0 && completed_batch_crafts > 1) {
-					FinishBatch();
-				}
 				RefreshCraftingMenu();
 			}
 			if (tracked_crafting_prompt != 0
@@ -455,6 +460,7 @@ namespace
 				remaining_batch_crafts = kCraftBatchLimit;
 				completed_batch_crafts = 0;
 				force_safe_breakout = false;
+				craft_succeeded_since_safe_breakout = false;
 				batch_popup_shown = false;
 				TRACE_BATCH("BATCH_ARM", std::nullopt, 1, prompt);
 			}
@@ -474,10 +480,25 @@ namespace
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				ctx->set_return_value<BOOL>(true);
 			}
-			else if (event_hash == kSafeBreakoutEvent && force_safe_breakout) {
-				ctx->set_return_value<BOOL>(true);
-				force_safe_breakout = false;
-				FinishBatch();
+			else if (event_hash == kSafeBreakoutEvent) {
+				const bool game_wants_to_exit = *ctx->get_return_value<BOOL>() != 0;
+				if (force_safe_breakout) {
+					ctx->set_return_value<BOOL>(true);
+					FinishBatch();
+				}
+				else if (remaining_batch_crafts > 0 && craft_succeeded_since_safe_breakout) {
+					// Keep the loop alive after a real craft; the next forced commit is
+					// still validated by RDR2 before it can add any ammo.
+					ctx->set_return_value<BOOL>(false);
+					craft_succeeded_since_safe_breakout = false;
+					TRACE_BATCH("BATCH_BREAKOUT_SUPPRESSED", event_hash, 0);
+				}
+				else if (remaining_batch_crafts > 0 && game_wants_to_exit) {
+					// RDR2 declined the next transaction because of ingredients or
+					// capacity, so preserve its normal partial-batch exit.
+					FinishBatch();
+					TRACE_BATCH("BATCH_BREAKOUT_ON_FAILURE", event_hash, 1);
+				}
 			}
 		});
 
@@ -487,6 +508,7 @@ namespace
 				TRACE_BATCH("BATCH_CANCEL_ITEM_ADD");
 				remaining_batch_crafts = 0;
 				completed_batch_crafts = 0;
+				craft_succeeded_since_safe_breakout = false;
 				force_safe_breakout = true;
 			}
 		});
@@ -506,6 +528,7 @@ namespace
 				return;
 			}
 			++completed_batch_crafts;
+			craft_succeeded_since_safe_breakout = true;
 
 			if (remaining_batch_crafts > 0) {
 				--remaining_batch_crafts;
