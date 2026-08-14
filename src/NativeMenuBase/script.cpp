@@ -39,7 +39,8 @@ namespace
 		int count = 0;
 	};
 
-	std::array<IngredientCountBinding, 4> ingredient_count_bindings{};
+	std::array<IngredientCountBinding, 64> ingredient_count_bindings{};
+	std::size_t next_ingredient_binding = 0;
 	bool refreshing_ingredient_binding = false;
 	rage::scrThread** current_script_thread = nullptr;
 
@@ -330,12 +331,24 @@ namespace
 	void TrackIngredientCountBinding(Any context, int count)
 	{
 		for (auto& binding : ingredient_count_bindings) {
-			if (binding.context == context || binding.context == 0) {
+			if (binding.context == context) {
+				binding.count = count;
+				return;
+			}
+		}
+
+		for (auto& binding : ingredient_count_bindings) {
+			if (binding.context == 0) {
 				binding.context = context;
 				binding.count = count;
 				return;
 			}
 		}
+
+		auto& binding = ingredient_count_bindings[next_ingredient_binding];
+		binding.context = context;
+		binding.count = count;
+		next_ingredient_binding = (next_ingredient_binding + 1) % ingredient_count_bindings.size();
 	}
 
 	void RefreshRemovedIngredientCount(int before_count, int after_count)
