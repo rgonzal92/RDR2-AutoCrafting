@@ -34,10 +34,10 @@ their normal one-craft behavior.
 
 ## Startup
 
-`src/NativeMenuBase/main.cpp` is the Windows DLL entry point. It initializes
+`src/AutoCraft/main.cpp` is the Windows DLL entry point. It initializes
 MinHook and registers `ScriptMain` with ScriptHook.
 
-`src/NativeMenuBase/script.cpp` contains the mod behavior. `ScriptMain` scans
+`src/AutoCraft/script.cpp` contains the mod behavior. `ScriptMain` scans
 the running game for two addresses:
 
 1. the currently executing RDR2 script thread;
@@ -112,11 +112,11 @@ is created only after RDR2's own transaction succeeds.
 
 | File | Purpose |
 | --- | --- |
-| `src/NativeMenuBase/main.cpp` | DLL attach/detach and ScriptHook registration. |
-| `src/NativeMenuBase/script.cpp` | Batch state, hooks, UI refresh, and Diagnostic behavior. |
-| `src/NativeMenuBase/hookhandler.hpp` | MinHook wrapper used to intercept RDR2 natives. |
-| `src/NativeMenuBase/scanner.*` | Signature scanner used to find version-sensitive game addresses. |
-| `src/NativeMenuBase/diagnostic_logger.*` | Tab-separated logging used by the Diagnostic build. |
+| `src/AutoCraft/main.cpp` | DLL attach/detach and ScriptHook registration. |
+| `src/AutoCraft/script.cpp` | Batch state, hooks, UI refresh, and Diagnostic behavior. |
+| `src/AutoCraft/hookhandler.hpp` | MinHook wrapper used to intercept RDR2 natives. |
+| `src/AutoCraft/scanner.*` | Signature scanner used to find version-sensitive game addresses. |
+| `src/AutoCraft/diagnostic_logger.*` | Tab-separated logging used by the Diagnostic build. |
 | `docs/AMMO_DIAGNOSTICS.md` | Safe procedure for a logging-only investigation. |
 
 ## Diagnostic build
