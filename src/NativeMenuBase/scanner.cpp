@@ -1,5 +1,8 @@
-#include "script.h"
 #include "scanner.hpp"
+
+#include <cstdlib>
+#include <cstring>
+#include <windows.h>
 
 scanner::scanner(const char* module_name)
 {
@@ -29,17 +32,28 @@ std::vector<int> scanner::ConvPatternToByte(const char* pattern)
 
 Handle scanner::scan(const char* pattern)
 {
+    if (this->module_address == 0 || pattern == nullptr || *pattern == '\0')
+        return Handle();
+
     auto dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(this->module_address);
+    if (dos_header->e_magic != IMAGE_DOS_SIGNATURE)
+        return Handle();
+
     auto nt_header = reinterpret_cast<IMAGE_NT_HEADERS*>(reinterpret_cast<std::uint8_t*>(this->module_address) + dos_header->e_lfanew);
+    if (nt_header->Signature != IMAGE_NT_SIGNATURE)
+        return Handle();
 
     auto size = nt_header->OptionalHeader.SizeOfImage;
     auto pattern_bytes = this->ConvPatternToByte(pattern);
+    if (pattern_bytes.empty() || pattern_bytes.size() > size)
+        return Handle();
+
     auto start_module = reinterpret_cast<std::uint8_t*>(this->module_address);
 
-    for (auto i = 0; i < size - pattern_bytes.size(); ++i)
+    for (std::size_t i = 0; i <= size - pattern_bytes.size(); ++i)
     {
         bool found_byte_set = true;
-        for (auto j = 0; j < pattern_bytes.size(); ++j)
+        for (std::size_t j = 0; j < pattern_bytes.size(); ++j)
         {
             if (start_module[i + j] != pattern_bytes.data()[j] && pattern_bytes.data()[j] != -1)
             {

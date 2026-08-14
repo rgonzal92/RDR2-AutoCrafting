@@ -1,6 +1,8 @@
 #pragma once
 
-#include "common.hpp"
+#include <cstdint>
+#include <type_traits>
+#include <vector>
 
 class Handle
 {
@@ -34,6 +36,12 @@ public:
 		return Add(As<std::int32_t&>()).Add(4);
 	}
 
+	/** Returns whether this handle contains a resolved address. */
+	[[nodiscard]] bool IsValid() const
+	{
+		return m_ptr != nullptr;
+	}
+
 private:
 	void* m_ptr;
 };
@@ -41,7 +49,7 @@ private:
 template <typename T>
 inline std::enable_if_t<std::is_pointer_v<T>, T> Handle::As()
 {
-	return static_cast<T>(m_ptr);
+	return reinterpret_cast<T>(m_ptr);
 }
 
 template <typename T>

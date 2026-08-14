@@ -1,20 +1,19 @@
-#include "..\..\inc\main.h"
+#include "../../inc/main.h"
 #include "script.h"
-#include "keyboard.h"
-#include <iostream>
 
 #include "../../inc/MinHook.h"
 
-BOOL APIENTRY DllMain(HMODULE hInstance, DWORD reason, LPVOID lpReserved)
+BOOL APIENTRY DllMain(HMODULE hInstance, DWORD reason, LPVOID)
 {
 	switch (reason)
 	{
 	case DLL_PROCESS_ATTACH:
-		scriptRegister(hInstance, ScriptMain);
-		keyboardHandlerRegister(OnKeyboardMessage);
-
 		DisableThreadLibraryCalls(hInstance);
-		MH_Initialize();
+		if (MH_Initialize() != MH_OK) {
+			return FALSE;
+		}
+
+		scriptRegister(hInstance, ScriptMain);
 		break;
 	case DLL_PROCESS_DETACH:
 		MH_DisableHook(MH_ALL_HOOKS);
@@ -22,7 +21,6 @@ BOOL APIENTRY DllMain(HMODULE hInstance, DWORD reason, LPVOID lpReserved)
 		MH_Uninitialize();
 		
 		scriptUnregister(hInstance);
-		keyboardHandlerUnregister(OnKeyboardMessage);
 		break;
 	}
 

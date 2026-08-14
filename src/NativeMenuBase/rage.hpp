@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "script.h"
+#include "../../inc/types.h"
 
 namespace rage
 {
@@ -187,7 +187,7 @@ namespace menu {
 		}
 
 		CallContext(rage::scrNativeCallContext* ctx) {
-			for (int i = 0; i < ctx->get_arg_count(); i++) {
+			for (std::uint32_t i = 0; i < ctx->get_arg_count(); ++i) {
 				this->push_arg<Any>(ctx->get_arg<Any>(i));
 			}
 			this->set_return_value<Any>(*ctx->get_return_value<Any>());
