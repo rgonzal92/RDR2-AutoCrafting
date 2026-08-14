@@ -40,6 +40,7 @@ log after each run:
 6. Output ammo at capacity.
 
 Record the visible input and output counts before and after each attempt. A
-transaction-level batching prototype is permitted only if the traces show a
-stable one-craft boundary, validation before mutation, a definitive result,
-consistent capacity handling, and no unrelated operations inside the boundary.
+transaction-level batch change is permitted only if the traces show a stable
+one-craft boundary, validation before mutation, a definitive result, consistent
+capacity handling, and no unrelated operations inside the boundary. Re-run this
+investigation after a game update before relying on script-global indexes.

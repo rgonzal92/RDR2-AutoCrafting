@@ -1,5 +1,8 @@
 // Licensed under the MIT License.
 
+// AutoCraft accelerates ammunition crafting by repeating RDR2's own validated
+// craft transaction. It never changes an inventory or ammunition quantity.
+
 #include "script.h"
 
 #include "../../inc/main.h"
@@ -19,20 +22,33 @@
 
 namespace
 {
+	// The maximum number of successful game-validated ammo crafts per action.
 	constexpr int kCraftBatchLimit = 50;
+	// A forced craft normally commits in the same frame. This is only a fail-safe
+	// for an unexpected script state that otherwise would keep the batch active.
 	constexpr int kBatchNoProgressFrameLimit = 120;
+	// Animation events and script hashes observed in player_camp and
+	// interactive_campfire on RDR2 1.0.1491.50.
 	constexpr Hash kCraftCommitEvent = 0xFC4F2858;
 	constexpr Hash kSafeBreakoutEvent = 0x238C32C3;
 	constexpr Hash kCraftingScript = 0x38EB3D5B;
 	constexpr Hash kCraftingMenuScript = 0xA64E7B5F;
 	constexpr Hash kCraftingHudContext = 0xE3FEFB3D;
+	// These globals are diagnostic-only probes. They must be revalidated after a
+	// game update because ScriptHook global indexes are build-specific.
 	constexpr int kCraftRecipeCountGlobal = 1913490;
 	constexpr int kCraftPreselectedRecipeGlobal = 1913491;
+	// The crafting scripts consume this flag by rebuilding their recipe data.
+	// Its index was verified on RDR2 1.0.1491.50.
 	constexpr int kCraftMenuRefreshGlobal = 1913494;
 
+	// Prompt handles identify the game controls that begin a craft or signal that
+	// the recipe menu is active again.
 	Prompt tracked_crafting_prompt = 0;
 	Prompt recipe_menu_prompt = 0;
 	int skipped_frame = -1;
+	// These counters track real, successful game transactions—not requested
+	// quantities. A failed transaction never decrements the remaining count.
 	int remaining_batch_crafts = 0;
 	int completed_batch_crafts = 0;
 	bool pending_menu_refresh = false;
@@ -85,6 +101,7 @@ namespace
 	}
 #endif
 
+	/** Resets transient batch state after RDR2 completes or rejects a craft. */
 	void FinishBatch()
 	{
 		remaining_batch_crafts = 0;
@@ -101,6 +118,7 @@ namespace
 		completed_batch_crafts = 0;
 	}
 
+	/** Requests RDR2's own recipe-menu rebuild after a multi-craft batch. */
 	void RefreshCraftingMenu()
 	{
 		if (!pending_menu_refresh) {
@@ -114,6 +132,8 @@ namespace
 	}
 
 #if AUTOCRAFT_DIAGNOSTIC
+	// The diagnostic build observes native calls but never alters arguments or
+	// return values, so one manual craft remains an unmodified RDR2 transaction.
 	int last_global_trace_frame = -60;
 
 	int QueryInventoryCount(int inventory_id, Hash item)
@@ -376,8 +396,11 @@ namespace
 		});
 	}
 #else
+	/** Installs the release hooks that accelerate validated ammunition crafts. */
 	void InitializeNormalHooks()
 	{
+		// RDR2 sets this HUD context for an unrelated prompt path. Ignore prompt
+		// text from that path so it cannot arm a crafting batch.
 		NHOOK("_ENABLE_HUD_CONTEXT_THIS_FRAME", 0xC9CAEAEEC1256E54, {
 			if (IsCraftingScript() && ctx->get_arg<Hash>(0) == kCraftingHudContext) {
 				skipped_frame = MISC::GET_FRAME_COUNT();
@@ -407,11 +430,15 @@ namespace
 
 			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
 			if (prompt == recipe_menu_prompt && !pressed) {
+				// State 10 has returned to the recipe menu, which is the only safe
+				// point to request RDR2's build-specific UI refresh flag.
 				RefreshCraftingMenu();
 			}
 			if (tracked_crafting_prompt != 0
 				&& prompt == tracked_crafting_prompt
 				&& pressed) {
+				// "Craft Again" arms a full batch. The first craft selected from the
+				// recipe list arms itself when its first ammo add succeeds below.
 				remaining_batch_crafts = kCraftBatchLimit;
 				completed_batch_crafts = 0;
 				force_safe_breakout = false;
@@ -429,6 +456,8 @@ namespace
 				return;
 			}
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
+				// Let the game reach its existing validation and inventory path without
+				// waiting for another visible craft-animation event.
 				if (!awaiting_batch_ammo_add) {
 					forced_commit_frame = MISC::GET_FRAME_COUNT();
 					awaiting_batch_ammo_add = true;
@@ -466,6 +495,8 @@ namespace
 		NHOOK("_INVENTORY_ADD_ITEM_WITH_GUID", 0xCB5D11F9508A928D, {
 			CALL();
 			if (IsCraftingScript() && remaining_batch_crafts > 0) {
+				// Non-ammo recipes use a different output path. Stop only AutoCraft's
+				// acceleration and leave the game's normal item craft untouched.
 				remaining_batch_crafts = 0;
 				completed_batch_crafts = 0;
 				forced_commit_frame = -1;
@@ -489,6 +520,8 @@ namespace
 				return;
 			}
 
+			// A positive count change is the definitive success signal. This is why
+			// each batch remains limited by the player's real ingredients and capacity.
 			const bool starts_new_batch = remaining_batch_crafts == 0;
 			if (!starts_new_batch && !awaiting_batch_ammo_add) {
 				return;
@@ -514,6 +547,8 @@ namespace
 
 		NHOOK("_UI_FEED_POST_SAMPLE_TOAST_RIGHT", 0xB249EBCB30DD88E0, {
 			if (IsCraftingScript() && (remaining_batch_crafts > 0 || force_safe_breakout)) {
+				// Inventory changes still occur individually; only repeated UI toasts
+				// are hidden after the first one in the same batch.
 				if (batch_popup_shown) {
 					ctx->set_return_value<int>(0);
 					return;

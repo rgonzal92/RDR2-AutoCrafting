@@ -8,6 +8,13 @@ or ammunition reaches capacity. Non-ammunition recipes still craft once.
 AutoCraft is always enabled and has no custom menu or keyboard shortcut. One
 inventory notification is shown for each ammunition batch.
 
+## Documentation
+
+- [How AutoCraft works](docs/ARCHITECTURE.md) explains batching, safety limits,
+  menu refreshes, and the active source files in plain English.
+- [Ammo crafting diagnostic](docs/AMMO_DIAGNOSTICS.md) describes the separate
+  logging-only build used when a game update needs investigation.
+
 ## Build
 
 Run the **Build AutoCraft** workflow from the repository's Actions page. The

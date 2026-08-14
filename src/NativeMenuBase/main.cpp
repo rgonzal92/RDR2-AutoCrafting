@@ -3,6 +3,13 @@
 
 #include "../../inc/MinHook.h"
 
+/**
+ * Initializes and tears down MinHook around the ASI's ScriptHook registration.
+ *
+ * @param hInstance Module handle supplied by Windows.
+ * @param reason DLL lifecycle notification supplied by Windows.
+ * @return FALSE only when MinHook cannot initialize during process attach.
+ */
 BOOL APIENTRY DllMain(HMODULE hInstance, DWORD reason, LPVOID)
 {
 	switch (reason)

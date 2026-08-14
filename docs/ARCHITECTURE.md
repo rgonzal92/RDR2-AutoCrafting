@@ -1,0 +1,143 @@
+# How AutoCraft works
+
+This document explains the mod in plain English. You do not need to know C++
+to use it, but it also describes where the important behavior lives in the
+source code.
+
+## What the mod does
+
+AutoCraft applies to **ammunition recipes only**. One craft action can perform
+up to 50 normal RDR2 ammunition crafts without waiting for each repeated
+animation.
+
+It does **not** multiply an item amount. Instead, RDR2 still performs each
+individual transaction:
+
+1. RDR2 checks the recipe's ingredients and available ammo capacity.
+2. RDR2 removes the required ingredients.
+3. RDR2 adds one normal ammo output.
+4. AutoCraft counts that successful addition and, if the batch has not ended,
+   lets RDR2 begin the next validated transaction immediately.
+
+If there are ingredients for 7 crafts, the batch makes 7. If the ammo pouch is
+nearly full, the batch stops when no more ammo fits. Non-ammunition recipes use
+their normal one-craft behavior.
+
+## Terms used in the source
+
+- **Native**: a function supplied by RDR2, such as "add ammo".
+- **Hook**: a small wrapper that lets AutoCraft observe or adjust one native
+  call before returning control to RDR2.
+- **Transaction**: one complete game-validated craft: ingredient removal plus
+  successful output addition.
+- **Batch**: up to 50 transactions started by one player craft action.
+
+## Startup
+
+`src/NativeMenuBase/main.cpp` is the Windows DLL entry point. It initializes
+MinHook and registers `ScriptMain` with ScriptHook.
+
+`src/NativeMenuBase/script.cpp` contains the mod behavior. `ScriptMain` scans
+the running game for two addresses:
+
+1. the currently executing RDR2 script thread;
+2. RDR2's native-function dispatcher.
+
+If either address cannot be found, the mod logs an error and does not install
+hooks. That is safer than guessing at an address after a game update.
+
+## Normal ammunition-batch flow
+
+The normal build only operates while RDR2 is running either `player_camp` or
+`interactive_campfire`. This avoids changing inventory behavior elsewhere in
+the game.
+
+### Starting a batch
+
+- Selecting an ammo recipe performs its first craft normally. When RDR2
+  actually adds ammo, AutoCraft starts the remaining 49 possible crafts.
+- Pressing **Craft Again** arms a 50-craft batch before its next craft begins.
+
+The successful `_ADD_AMMO_TO_PED_BY_TYPE` call is the confirmation that a craft
+really happened. AutoCraft does not decrement the remaining count merely
+because a button was pressed or an animation event fired.
+
+### Skipping repeated animation waits
+
+RDR2 normally waits for a crafting animation event before committing a craft.
+AutoCraft reports that event as ready while a batch remains. RDR2 then follows
+its own existing recipe, ingredient, inventory, and ammo-capacity logic.
+
+RDR2 also reports a `safetobreakout` event after each completed animation.
+AutoCraft suppresses that exit only when the immediately preceding craft added
+ammo successfully. If RDR2 cannot add ammo on the next attempt, its normal
+exit is preserved.
+
+There is also a 120-frame no-progress safeguard. If a forced craft neither
+adds ammo nor reports its normal exit in that window, AutoCraft stops the batch
+instead of keeping it active indefinitely.
+
+### Notifications
+
+RDR2 still performs individual inventory updates, which would normally request
+one toast notification per craft. AutoCraft lets the first toast through and
+hides later toasts in the same batch. Hiding a toast does not affect inventory
+or ingredient changes.
+
+## Crafting-menu refresh
+
+RDR2 takes an ingredient-count snapshot when a recipe menu opens. A rapid
+batch can finish after that snapshot, leaving the menu temporarily showing the
+first craft's deduction instead of the full batch.
+
+After a multi-craft batch, AutoCraft sets RDR2's existing recipe-refresh flag.
+The game rebuilds its own recipe and ingredient data from live inventory, so
+the displayed count matches the real count without closing the UI.
+
+The flag is a game-script global verified for **RDR2 1.0.1491.50**. A future
+RDR2 update may move that global. If an update changes menu behavior, first use
+the Diagnostic build to revalidate it before changing the normal build.
+
+The rebuild can briefly reset the selected recipe or variant. That is a game
+side effect of asking it to refresh the recipe list.
+
+## Why the mod does not multiply native quantities
+
+Earlier versions multiplied amounts passed to inventory and ammo natives. That
+could add many outputs even when RDR2 had validated only one craft, or consume
+more inputs than were available. The current design avoids this: every output
+is created only after RDR2's own transaction succeeds.
+
+## Source map
+
+| File | Purpose |
+| --- | --- |
+| `src/NativeMenuBase/main.cpp` | DLL attach/detach and ScriptHook registration. |
+| `src/NativeMenuBase/script.cpp` | Batch state, hooks, UI refresh, and Diagnostic behavior. |
+| `src/NativeMenuBase/hookhandler.hpp` | MinHook wrapper used to intercept RDR2 natives. |
+| `src/NativeMenuBase/scanner.*` | Signature scanner used to find version-sensitive game addresses. |
+| `src/NativeMenuBase/diagnostic_logger.*` | Tab-separated logging used by the Diagnostic build. |
+| `docs/AMMO_DIAGNOSTICS.md` | Safe procedure for a logging-only investigation. |
+
+## Diagnostic build
+
+The `Diagnostic|x64` configuration produces `AutoCraftDiagnostic.asi`. It does
+not batch crafts, modify native arguments, or alter native return values. It
+only records normal RDR2 calls to `AutoCraft-diagnostic.log` beside the ASI.
+
+Never load `AutoCraft.asi` and `AutoCraftDiagnostic.asi` together. See
+[`AMMO_DIAGNOSTICS.md`](AMMO_DIAGNOSTICS.md) before using the Diagnostic build.
+
+## Updating RDR2 or native declarations
+
+`inc/natives.h` contains native names and C++ signatures. Updating it can help
+with names and documentation, but it does not automatically fix crafting
+behavior: AutoCraft's batching issue was in the camp scripts' state flow.
+
+Before changing a native declaration or game-script global:
+
+1. compare only the native hashes and signatures AutoCraft actually uses;
+2. build both Release and Diagnostic configurations;
+3. repeat the ingredient-limited and near-capacity tests;
+4. revalidate the recipe-refresh global with the Diagnostic build after a game
+   update.
