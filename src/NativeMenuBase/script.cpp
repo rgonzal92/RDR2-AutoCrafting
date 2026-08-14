@@ -392,6 +392,9 @@ namespace
 
 			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
 			if (prompt == recipe_menu_prompt && !pressed) {
+				if (remaining_batch_crafts > 0 && completed_batch_crafts > 1) {
+					FinishBatch();
+				}
 				RefreshCraftingMenu();
 			}
 			if (tracked_crafting_prompt != 0
@@ -414,15 +417,10 @@ namespace
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				ctx->set_return_value<BOOL>(true);
 			}
-			else if (event_hash == kSafeBreakoutEvent) {
-				const bool breakout_fired = *ctx->get_return_value<BOOL>() != 0;
-				if (force_safe_breakout) {
-					ctx->set_return_value<BOOL>(true);
-				}
-				if (breakout_fired || force_safe_breakout) {
-					force_safe_breakout = false;
-					FinishBatch();
-				}
+			else if (event_hash == kSafeBreakoutEvent && force_safe_breakout) {
+				ctx->set_return_value<BOOL>(true);
+				force_safe_breakout = false;
+				FinishBatch();
 			}
 		});
 
