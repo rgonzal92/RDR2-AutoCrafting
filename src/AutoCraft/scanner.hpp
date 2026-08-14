@@ -63,18 +63,6 @@ public:
 	}
 
 	/**
-	 * Returns a new handle moved backward by a byte offset.
-	 *
-	 * @param offset Number of bytes to subtract.
-	 * @return A new handle at the adjusted address.
-	 */
-	template <typename T>
-	Handle Sub(T offset)
-	{
-		return Handle(As<std::uintptr_t>() - offset);
-	}
-
-	/**
 	 * Resolves a RIP-relative 32-bit displacement at this address.
 	 *
 	 * @return A handle pointing to the displacement target.

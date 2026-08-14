@@ -45,6 +45,9 @@ namespace
 	// Prompt handles identify the game controls that begin a craft or signal that
 	// the recipe menu is active again.
 	Prompt tracked_crafting_prompt = 0;
+	rage::scrThread** current_script_thread = nullptr;
+
+#if !AUTOCRAFT_DIAGNOSTIC
 	Prompt recipe_menu_prompt = 0;
 	int skipped_frame = -1;
 	// These counters track real, successful game transactions—not requested
@@ -59,7 +62,7 @@ namespace
 	// distinguishes that normal per-craft signal from a failed craft attempt.
 	bool craft_succeeded_since_safe_breakout = false;
 	bool batch_popup_shown = false;
-	rage::scrThread** current_script_thread = nullptr;
+#endif
 
 	using GetNativeHandler = rage::scrNativeHandler(*)(rage::scrNativeHash hash);
 	GetNativeHandler get_native_handler = nullptr;
@@ -100,36 +103,6 @@ namespace
 		return record;
 	}
 #endif
-
-	/** Resets transient batch state after RDR2 completes or rejects a craft. */
-	void FinishBatch()
-	{
-		remaining_batch_crafts = 0;
-		force_safe_breakout = false;
-		forced_commit_frame = -1;
-		awaiting_batch_ammo_add = false;
-		craft_succeeded_since_safe_breakout = false;
-
-		// A single craft already refreshes the recipe menu. Request a rebuild only
-		// when RDR2 committed additional transactions inside the same menu action.
-		if (completed_batch_crafts > 1) {
-			pending_menu_refresh = true;
-		}
-		completed_batch_crafts = 0;
-	}
-
-	/** Requests RDR2's own recipe-menu rebuild after a multi-craft batch. */
-	void RefreshCraftingMenu()
-	{
-		if (!pending_menu_refresh) {
-			return;
-		}
-
-		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
-			*refresh_flag = 1;
-			pending_menu_refresh = false;
-		}
-	}
 
 #if AUTOCRAFT_DIAGNOSTIC
 	// The diagnostic build observes native calls but never alters arguments or
@@ -360,7 +333,7 @@ namespace
 			const Hash event_hash = ctx->get_arg<Hash>(1);
 			CALL();
 			const BOOL fired = *ctx->get_return_value<BOOL>();
-			if (fired || event_hash == static_cast<Hash>(-61921192)) {
+			if (fired || event_hash == kCraftCommitEvent) {
 				auto record = MakeRecord("ANIM_EVENT");
 				record.owner_id = entity;
 				record.subject_hash = event_hash;
@@ -396,6 +369,36 @@ namespace
 		});
 	}
 #else
+	/** Resets transient batch state after RDR2 completes or rejects a craft. */
+	void FinishBatch()
+	{
+		remaining_batch_crafts = 0;
+		force_safe_breakout = false;
+		forced_commit_frame = -1;
+		awaiting_batch_ammo_add = false;
+		craft_succeeded_since_safe_breakout = false;
+
+		// A single craft already refreshes the recipe menu. Request a rebuild only
+		// when RDR2 committed additional transactions inside the same menu action.
+		if (completed_batch_crafts > 1) {
+			pending_menu_refresh = true;
+		}
+		completed_batch_crafts = 0;
+	}
+
+	/** Requests RDR2's own recipe-menu rebuild after a multi-craft batch. */
+	void RefreshCraftingMenu()
+	{
+		if (!pending_menu_refresh) {
+			return;
+		}
+
+		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
+			*refresh_flag = 1;
+			pending_menu_refresh = false;
+		}
+	}
+
 	/** Installs the release hooks that accelerate validated ammunition crafts. */
 	void InitializeNormalHooks()
 	{
