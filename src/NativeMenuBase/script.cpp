@@ -19,7 +19,7 @@
 
 namespace
 {
-	constexpr int kCraftBatchLimit = 10;
+	constexpr int kCraftBatchLimit = 50;
 	constexpr Hash kCraftCommitEvent = 0xFC4F2858;
 	constexpr Hash kSafeBreakoutEvent = 0x238C32C3;
 	constexpr Hash kCraftingScript = 0x38EB3D5B;
