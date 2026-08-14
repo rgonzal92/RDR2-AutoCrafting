@@ -28,13 +28,13 @@ namespace
 	constexpr int kCraftRecipeCountGlobal = 1913490;
 	constexpr int kCraftPreselectedRecipeGlobal = 1913491;
 	constexpr int kCraftMenuRefreshGlobal = 1913494;
-	constexpr int kCraftMenuRefreshDelayFrames = 2;
 
 	Prompt tracked_crafting_prompt = 0;
+	Prompt recipe_menu_prompt = 0;
 	int skipped_frame = -1;
 	int remaining_batch_crafts = 0;
 	int completed_batch_crafts = 0;
-	int menu_refresh_frame = -1;
+	bool pending_menu_refresh = false;
 	bool force_safe_breakout = false;
 	bool batch_popup_shown = false;
 	rage::scrThread** current_script_thread = nullptr;
@@ -69,21 +69,21 @@ namespace
 	{
 		remaining_batch_crafts = 0;
 		if (completed_batch_crafts > 1) {
-			menu_refresh_frame = MISC::GET_FRAME_COUNT() + kCraftMenuRefreshDelayFrames;
+			pending_menu_refresh = true;
 		}
 		completed_batch_crafts = 0;
 	}
 
-	void RefreshCraftingMenuWhenReady()
+	void RefreshCraftingMenu()
 	{
-		if (menu_refresh_frame < 0 || MISC::GET_FRAME_COUNT() < menu_refresh_frame) {
+		if (!pending_menu_refresh) {
 			return;
 		}
 
 		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
 			*refresh_flag = 1;
+			pending_menu_refresh = false;
 		}
-		menu_refresh_frame = -1;
 	}
 
 #if AUTOCRAFT_DIAGNOSTIC
@@ -375,6 +375,9 @@ namespace
 				const char* prompt_text = ctx->get_arg<const char*>(1);
 				if (prompt_text != nullptr && IsCraftingPromptText(prompt_text)) {
 					tracked_crafting_prompt = ctx->get_arg<Prompt>(0);
+					if (std::string_view(prompt_text) == "CAMP_REC_MAKE") {
+						recipe_menu_prompt = tracked_crafting_prompt;
+					}
 				}
 			}
 			CALL();
@@ -383,13 +386,19 @@ namespace
 		NHOOK("_UI_PROMPT_IS_JUST_PRESSED", 0x2787CC611D3FACC5, {
 			const Prompt prompt = ctx->get_arg<Prompt>(0);
 			CALL();
-			if (IsCraftingScript()
-				&& tracked_crafting_prompt != 0
+			if (!IsCraftingScript()) {
+				return;
+			}
+
+			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
+			if (prompt == recipe_menu_prompt && !pressed) {
+				RefreshCraftingMenu();
+			}
+			if (tracked_crafting_prompt != 0
 				&& prompt == tracked_crafting_prompt
-				&& *ctx->get_return_value<BOOL>()) {
+				&& pressed) {
 				remaining_batch_crafts = kCraftBatchLimit;
 				completed_batch_crafts = 0;
-				menu_refresh_frame = -1;
 				force_safe_breakout = false;
 				batch_popup_shown = false;
 			}
@@ -401,7 +410,6 @@ namespace
 			if (!IsCraftingScript()) {
 				return;
 			}
-			RefreshCraftingMenuWhenReady();
 
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				ctx->set_return_value<BOOL>(true);
