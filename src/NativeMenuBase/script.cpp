@@ -17,6 +17,10 @@
 #define AUTOCRAFT_DIAGNOSTIC 0
 #endif
 
+#ifndef AUTOCRAFT_TRACE
+#define AUTOCRAFT_TRACE 0
+#endif
+
 namespace
 {
 	constexpr int kCraftBatchLimit = 50;
@@ -65,30 +69,7 @@ namespace
 			|| text == "CAMP_REC_MAKE";
 	}
 
-	void FinishBatch()
-	{
-		remaining_batch_crafts = 0;
-		if (completed_batch_crafts > 1) {
-			pending_menu_refresh = true;
-		}
-		completed_batch_crafts = 0;
-	}
-
-	void RefreshCraftingMenu()
-	{
-		if (!pending_menu_refresh) {
-			return;
-		}
-
-		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
-			*refresh_flag = 1;
-			pending_menu_refresh = false;
-		}
-	}
-
-#if AUTOCRAFT_DIAGNOSTIC
-	int last_global_trace_frame = -60;
-
+#if AUTOCRAFT_DIAGNOSTIC || AUTOCRAFT_TRACE
 	diagnostic::Record MakeRecord(std::string_view event)
 	{
 		diagnostic::Record record;
@@ -100,6 +81,61 @@ namespace
 		}
 		return record;
 	}
+#endif
+
+#if AUTOCRAFT_TRACE
+	void TraceBatchState(
+		std::string_view event,
+		std::optional<Hash> subject_hash = std::nullopt,
+		std::optional<int> result = std::nullopt,
+		std::optional<Prompt> prompt = std::nullopt,
+		std::string_view text = {})
+	{
+		auto record = MakeRecord(event);
+		record.subject_hash = subject_hash;
+		record.before_count = remaining_batch_crafts;
+		record.after_count = completed_batch_crafts;
+		record.capacity = force_safe_breakout ? 1 : 0;
+		record.quantity = pending_menu_refresh ? 1 : 0;
+		record.result = result;
+		record.prompt = prompt;
+		record.text = text;
+		diagnostic::Write(record);
+	}
+#endif
+
+	void FinishBatch()
+	{
+	#if AUTOCRAFT_TRACE
+		TraceBatchState("BATCH_FINISH_BEGIN");
+	#endif
+		remaining_batch_crafts = 0;
+		if (completed_batch_crafts > 1) {
+			pending_menu_refresh = true;
+		}
+		completed_batch_crafts = 0;
+	#if AUTOCRAFT_TRACE
+		TraceBatchState("BATCH_FINISH_END");
+	#endif
+	}
+
+	void RefreshCraftingMenu()
+	{
+		if (!pending_menu_refresh) {
+			return;
+		}
+
+		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
+			*refresh_flag = 1;
+			pending_menu_refresh = false;
+		#if AUTOCRAFT_TRACE
+			TraceBatchState("MENU_REFRESH_WRITE", std::nullopt, 1);
+		#endif
+		}
+	}
+
+#if AUTOCRAFT_DIAGNOSTIC
+	int last_global_trace_frame = -60;
 
 	int QueryInventoryCount(int inventory_id, Hash item)
 	{
@@ -378,6 +414,10 @@ namespace
 					if (std::string_view(prompt_text) == "CAMP_REC_MAKE") {
 						recipe_menu_prompt = tracked_crafting_prompt;
 					}
+				#if AUTOCRAFT_TRACE
+					TraceBatchState("BATCH_PROMPT_TEXT", std::nullopt, std::nullopt,
+						tracked_crafting_prompt, prompt_text);
+				#endif
 				}
 			}
 			CALL();
@@ -391,6 +431,11 @@ namespace
 			}
 
 			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
+		#if AUTOCRAFT_TRACE
+			if (pressed || prompt == recipe_menu_prompt) {
+				TraceBatchState("BATCH_PROMPT_QUERY", std::nullopt, pressed ? 1 : 0, prompt);
+			}
+		#endif
 			if (prompt == recipe_menu_prompt && !pressed) {
 				if (remaining_batch_crafts > 0 && completed_batch_crafts > 1) {
 					FinishBatch();
@@ -404,6 +449,9 @@ namespace
 				completed_batch_crafts = 0;
 				force_safe_breakout = false;
 				batch_popup_shown = false;
+			#if AUTOCRAFT_TRACE
+				TraceBatchState("BATCH_ARM", std::nullopt, 1, prompt);
+			#endif
 			}
 		});
 
@@ -413,6 +461,12 @@ namespace
 			if (!IsCraftingScript()) {
 				return;
 			}
+		#if AUTOCRAFT_TRACE
+			if (event_hash == kCraftCommitEvent || event_hash == kSafeBreakoutEvent) {
+				TraceBatchState("BATCH_ANIM_EVENT", event_hash,
+					*ctx->get_return_value<BOOL>() != 0 ? 1 : 0);
+			}
+		#endif
 
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				ctx->set_return_value<BOOL>(true);
@@ -427,6 +481,9 @@ namespace
 		NHOOK("_INVENTORY_ADD_ITEM_WITH_GUID", 0xCB5D11F9508A928D, {
 			CALL();
 			if (IsCraftingScript() && remaining_batch_crafts > 0) {
+			#if AUTOCRAFT_TRACE
+				TraceBatchState("BATCH_CANCEL_ITEM_ADD");
+			#endif
 				remaining_batch_crafts = 0;
 				completed_batch_crafts = 0;
 				force_safe_breakout = true;
@@ -443,6 +500,17 @@ namespace
 			const int before_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
 			CALL();
 			const int after_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
+		#if AUTOCRAFT_TRACE
+			{
+				auto record = MakeRecord("BATCH_AMMO_NATIVE");
+				record.owner_id = ped;
+				record.subject_hash = ammo_type;
+				record.quantity = ctx->get_arg<int>(2);
+				record.before_count = before_count;
+				record.after_count = after_count;
+				diagnostic::Write(record);
+			}
+		#endif
 			if (after_count <= before_count) {
 				return;
 			}
@@ -459,6 +527,9 @@ namespace
 			if (remaining_batch_crafts == 0) {
 				force_safe_breakout = true;
 			}
+		#if AUTOCRAFT_TRACE
+			TraceBatchState("BATCH_AMMO_STATE", ammo_type, after_count > before_count ? 1 : 0);
+		#endif
 		});
 
 		NHOOK("_UI_FEED_POST_SAMPLE_TOAST_RIGHT", 0xB249EBCB30DD88E0, {
@@ -481,7 +552,7 @@ void ScriptMain()
 	AllocateConsole("Debug");
 #endif
 
-#if AUTOCRAFT_DIAGNOSTIC
+#if AUTOCRAFT_DIAGNOSTIC || AUTOCRAFT_TRACE
 	if (!diagnostic::Initialize()) {
 		PRINT_ERROR("Initialization failed: diagnostic log could not be opened.");
 		return;
