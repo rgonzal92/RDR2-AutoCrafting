@@ -11,6 +11,7 @@
 #include "scanner.hpp"
 
 #include <limits>
+#include <optional>
 #include <string_view>
 
 #ifndef AUTOCRAFT_DIAGNOSTIC
@@ -79,6 +80,17 @@ namespace
 		return WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
 	}
 
+	std::optional<int> QueryAmmoCapacity(Ped ped, Hash ammo_type)
+	{
+		diagnostic::ScopedInternalQuery query;
+		const Hash weapon = WEAPON::_GET_WEAPON_TYPE_FROM_AMMO_TYPE(ammo_type);
+		int capacity = 0;
+		if (weapon == 0 || !WEAPON::GET_MAX_AMMO(ped, &capacity, weapon)) {
+			return std::nullopt;
+		}
+		return capacity;
+	}
+
 	void InitializeDiagnosticHooks()
 	{
 		NHOOK("_UI_PROMPT_SET_TEXT", 0x5DD02A8318420DD7, {
@@ -90,15 +102,17 @@ namespace
 			const Prompt prompt = ctx->get_arg<Prompt>(0);
 			const char* prompt_text = ctx->get_arg<const char*>(1);
 			const std::string_view text = prompt_text != nullptr ? prompt_text : "";
-			if (IsCraftingPromptText(text)) {
+			const bool relevant_prompt = IsCraftingPromptText(text);
+			if (relevant_prompt) {
 				tracked_crafting_prompt = prompt;
 			}
 			CALL();
-
-			auto record = MakeRecord("PROMPT_SET_TEXT");
-			record.prompt = prompt;
-			record.text = text;
-			diagnostic::Write(record);
+			if (relevant_prompt) {
+				auto record = MakeRecord("PROMPT_SET_TEXT");
+				record.prompt = prompt;
+				record.text = text;
+				diagnostic::Write(record);
+			}
 		});
 
 		NHOOK("_UI_PROMPT_REGISTER_END", 0xF7AA2696A22AD8B9, {
@@ -249,6 +263,7 @@ namespace
 			record.reason_hash = reason;
 			record.before_count = before_count;
 			record.after_count = after_count;
+			record.capacity = QueryAmmoCapacity(ped, ammo_type);
 			diagnostic::Write(record);
 		});
 	}

@@ -20,6 +20,7 @@ namespace diagnostic
 		std::optional<std::uint32_t> reason_hash{};
 		std::optional<int> before_count{};
 		std::optional<int> after_count{};
+		std::optional<int> capacity{};
 		std::optional<int> result{};
 		std::optional<int> prompt{};
 		std::string_view text{};

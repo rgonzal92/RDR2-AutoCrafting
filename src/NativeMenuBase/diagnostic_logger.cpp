@@ -86,7 +86,7 @@ bool diagnostic::Initialize()
 
 	log_stream
 		<< "sequence\tframe\tscript_hash\tscript_thread\tevent\towner_id\tsubject_hash"
-		<< "\tquantity\tslot_hash\treason_hash\tbefore_count\tafter_count\tresult\tprompt\ttext\n";
+		<< "\tquantity\tslot_hash\treason_hash\tbefore_count\tafter_count\tcapacity\tresult\tprompt\ttext\n";
 	log_stream.flush();
 	return true;
 }
@@ -116,6 +116,8 @@ void diagnostic::Write(const Record& record)
 	WriteOptional(log_stream, record.before_count);
 	log_stream << '\t';
 	WriteOptional(log_stream, record.after_count);
+	log_stream << '\t';
+	WriteOptional(log_stream, record.capacity);
 	log_stream << '\t';
 	WriteOptional(log_stream, record.result);
 	log_stream << '\t';
