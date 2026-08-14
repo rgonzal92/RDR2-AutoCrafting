@@ -1,0 +1,33 @@
+name: Build AutoCraft Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - diagnostic/ammo-transactions
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+      - name: Build diagnostic x64
+        run: msbuild src/AutoCraft.sln /m /p:Configuration=Diagnostic /p:Platform=x64
+
+      - name: Upload diagnostic ASI
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: AutoCraft-ammo-diagnostic
+          path: src/build/Diagnostic/AutoCraftDiagnostic.asi
+          if-no-files-found: error

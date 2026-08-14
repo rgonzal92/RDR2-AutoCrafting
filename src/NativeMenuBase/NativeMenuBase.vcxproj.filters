@@ -3,6 +3,7 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="script.cpp" />
+    <ClCompile Include="diagnostic_logger.cpp" />
     <ClCompile Include="..\..\lib\MinHook\src\buffer.c">
       <Filter>lib\MinHook</Filter>
     </ClCompile>
@@ -35,6 +36,7 @@
     </ClInclude>
     <ClInclude Include="script.h" />
     <ClInclude Include="console.h" />
+    <ClInclude Include="diagnostic_logger.hpp" />
     <ClInclude Include="..\..\inc\MinHook.h">
       <Filter>include</Filter>
     </ClInclude>
