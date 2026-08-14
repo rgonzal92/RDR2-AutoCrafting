@@ -24,6 +24,7 @@
 namespace
 {
 	constexpr int kCraftBatchLimit = 50;
+	constexpr int kBatchNoProgressFrameLimit = 120;
 	constexpr Hash kCraftCommitEvent = 0xFC4F2858;
 	constexpr Hash kSafeBreakoutEvent = 0x238C32C3;
 	constexpr Hash kCraftingScript = 0x38EB3D5B;
@@ -40,6 +41,8 @@ namespace
 	int completed_batch_crafts = 0;
 	bool pending_menu_refresh = false;
 	bool force_safe_breakout = false;
+	int forced_commit_frame = -1;
+	bool awaiting_batch_ammo_add = false;
 	// RDR2 reports safetobreakout after every successful craft animation. This
 	// distinguishes that normal per-craft signal from a failed craft attempt.
 	bool craft_succeeded_since_safe_breakout = false;
@@ -129,6 +132,8 @@ namespace
 		TRACE_BATCH("BATCH_FINISH_BEGIN");
 		remaining_batch_crafts = 0;
 		force_safe_breakout = false;
+		forced_commit_frame = -1;
+		awaiting_batch_ammo_add = false;
 		craft_succeeded_since_safe_breakout = false;
 
 		// A single craft already refreshes the recipe menu. Request a rebuild only
@@ -460,6 +465,8 @@ namespace
 				remaining_batch_crafts = kCraftBatchLimit;
 				completed_batch_crafts = 0;
 				force_safe_breakout = false;
+				forced_commit_frame = -1;
+				awaiting_batch_ammo_add = false;
 				craft_succeeded_since_safe_breakout = false;
 				batch_popup_shown = false;
 				TRACE_BATCH("BATCH_ARM", std::nullopt, 1, prompt);
@@ -478,6 +485,10 @@ namespace
 			}
 
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
+				if (!awaiting_batch_ammo_add) {
+					forced_commit_frame = MISC::GET_FRAME_COUNT();
+					awaiting_batch_ammo_add = true;
+				}
 				ctx->set_return_value<BOOL>(true);
 			}
 			else if (event_hash == kSafeBreakoutEvent) {
@@ -499,6 +510,15 @@ namespace
 					FinishBatch();
 					TRACE_BATCH("BATCH_BREAKOUT_ON_FAILURE", event_hash, 1);
 				}
+				else if (remaining_batch_crafts > 0
+					&& awaiting_batch_ammo_add
+					&& MISC::GET_FRAME_COUNT() - forced_commit_frame >= kBatchNoProgressFrameLimit) {
+					// Do not keep forcing an unacknowledged transaction forever if a
+					// script variant neither adds ammo nor emits its normal exit event.
+					ctx->set_return_value<BOOL>(true);
+					FinishBatch();
+					TRACE_BATCH("BATCH_BREAKOUT_ON_TIMEOUT", event_hash, 1);
+				}
 			}
 		});
 
@@ -508,6 +528,8 @@ namespace
 				TRACE_BATCH("BATCH_CANCEL_ITEM_ADD");
 				remaining_batch_crafts = 0;
 				completed_batch_crafts = 0;
+				forced_commit_frame = -1;
+				awaiting_batch_ammo_add = false;
 				craft_succeeded_since_safe_breakout = false;
 				force_safe_breakout = true;
 			}
@@ -527,6 +549,14 @@ namespace
 			if (after_count <= before_count) {
 				return;
 			}
+
+			const bool starts_new_batch = remaining_batch_crafts == 0;
+			if (!starts_new_batch && !awaiting_batch_ammo_add) {
+				return;
+			}
+
+			forced_commit_frame = -1;
+			awaiting_batch_ammo_add = false;
 			++completed_batch_crafts;
 			craft_succeeded_since_safe_breakout = true;
 
