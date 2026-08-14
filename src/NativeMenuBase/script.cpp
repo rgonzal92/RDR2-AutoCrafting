@@ -102,21 +102,34 @@ namespace
 		record.text = text;
 		diagnostic::Write(record);
 	}
+
+	void TraceAmmoNative(Ped ped, Hash ammo_type, int quantity, int before_count, int after_count)
+	{
+		auto record = MakeRecord("BATCH_AMMO_NATIVE");
+		record.owner_id = ped;
+		record.subject_hash = ammo_type;
+		record.quantity = quantity;
+		record.before_count = before_count;
+		record.after_count = after_count;
+		diagnostic::Write(record);
+	}
+
+	#define TRACE_BATCH(...) TraceBatchState(__VA_ARGS__)
+	#define TRACE_AMMO_NATIVE(...) TraceAmmoNative(__VA_ARGS__)
+#else
+	#define TRACE_BATCH(...) ((void)0)
+	#define TRACE_AMMO_NATIVE(...) ((void)0)
 #endif
 
 	void FinishBatch()
 	{
-	#if AUTOCRAFT_TRACE
-		TraceBatchState("BATCH_FINISH_BEGIN");
-	#endif
+		TRACE_BATCH("BATCH_FINISH_BEGIN");
 		remaining_batch_crafts = 0;
 		if (completed_batch_crafts > 1) {
 			pending_menu_refresh = true;
 		}
 		completed_batch_crafts = 0;
-	#if AUTOCRAFT_TRACE
-		TraceBatchState("BATCH_FINISH_END");
-	#endif
+		TRACE_BATCH("BATCH_FINISH_END");
 	}
 
 	void RefreshCraftingMenu()
@@ -128,9 +141,7 @@ namespace
 		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
 			*refresh_flag = 1;
 			pending_menu_refresh = false;
-		#if AUTOCRAFT_TRACE
-			TraceBatchState("MENU_REFRESH_WRITE", std::nullopt, 1);
-		#endif
+			TRACE_BATCH("MENU_REFRESH_WRITE", std::nullopt, 1);
 		}
 	}
 
@@ -414,10 +425,8 @@ namespace
 					if (std::string_view(prompt_text) == "CAMP_REC_MAKE") {
 						recipe_menu_prompt = tracked_crafting_prompt;
 					}
-				#if AUTOCRAFT_TRACE
-					TraceBatchState("BATCH_PROMPT_TEXT", std::nullopt, std::nullopt,
+					TRACE_BATCH("BATCH_PROMPT_TEXT", std::nullopt, std::nullopt,
 						tracked_crafting_prompt, prompt_text);
-				#endif
 				}
 			}
 			CALL();
@@ -431,11 +440,9 @@ namespace
 			}
 
 			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
-		#if AUTOCRAFT_TRACE
 			if (pressed || prompt == recipe_menu_prompt) {
-				TraceBatchState("BATCH_PROMPT_QUERY", std::nullopt, pressed ? 1 : 0, prompt);
+				TRACE_BATCH("BATCH_PROMPT_QUERY", std::nullopt, pressed ? 1 : 0, prompt);
 			}
-		#endif
 			if (prompt == recipe_menu_prompt && !pressed) {
 				if (remaining_batch_crafts > 0 && completed_batch_crafts > 1) {
 					FinishBatch();
@@ -449,9 +456,7 @@ namespace
 				completed_batch_crafts = 0;
 				force_safe_breakout = false;
 				batch_popup_shown = false;
-			#if AUTOCRAFT_TRACE
-				TraceBatchState("BATCH_ARM", std::nullopt, 1, prompt);
-			#endif
+				TRACE_BATCH("BATCH_ARM", std::nullopt, 1, prompt);
 			}
 		});
 
@@ -461,12 +466,10 @@ namespace
 			if (!IsCraftingScript()) {
 				return;
 			}
-		#if AUTOCRAFT_TRACE
 			if (event_hash == kCraftCommitEvent || event_hash == kSafeBreakoutEvent) {
-				TraceBatchState("BATCH_ANIM_EVENT", event_hash,
+				TRACE_BATCH("BATCH_ANIM_EVENT", event_hash,
 					*ctx->get_return_value<BOOL>() != 0 ? 1 : 0);
 			}
-		#endif
 
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				ctx->set_return_value<BOOL>(true);
@@ -481,9 +484,7 @@ namespace
 		NHOOK("_INVENTORY_ADD_ITEM_WITH_GUID", 0xCB5D11F9508A928D, {
 			CALL();
 			if (IsCraftingScript() && remaining_batch_crafts > 0) {
-			#if AUTOCRAFT_TRACE
-				TraceBatchState("BATCH_CANCEL_ITEM_ADD");
-			#endif
+				TRACE_BATCH("BATCH_CANCEL_ITEM_ADD");
 				remaining_batch_crafts = 0;
 				completed_batch_crafts = 0;
 				force_safe_breakout = true;
@@ -500,17 +501,7 @@ namespace
 			const int before_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
 			CALL();
 			const int after_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
-		#if AUTOCRAFT_TRACE
-			{
-				auto record = MakeRecord("BATCH_AMMO_NATIVE");
-				record.owner_id = ped;
-				record.subject_hash = ammo_type;
-				record.quantity = ctx->get_arg<int>(2);
-				record.before_count = before_count;
-				record.after_count = after_count;
-				diagnostic::Write(record);
-			}
-		#endif
+			TRACE_AMMO_NATIVE(ped, ammo_type, ctx->get_arg<int>(2), before_count, after_count);
 			if (after_count <= before_count) {
 				return;
 			}
@@ -527,9 +518,7 @@ namespace
 			if (remaining_batch_crafts == 0) {
 				force_safe_breakout = true;
 			}
-		#if AUTOCRAFT_TRACE
-			TraceBatchState("BATCH_AMMO_STATE", ammo_type, after_count > before_count ? 1 : 0);
-		#endif
+			TRACE_BATCH("BATCH_AMMO_STATE", ammo_type, after_count > before_count ? 1 : 0);
 		});
 
 		NHOOK("_UI_FEED_POST_SAMPLE_TOAST_RIGHT", 0xB249EBCB30DD88E0, {
