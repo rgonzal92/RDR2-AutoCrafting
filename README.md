@@ -28,4 +28,3 @@ https://www.nexusmods.com/reddeadredemption2/mods/3302
 ## Credits
 
 - Alexander Blade for the Scripthook SDK for RDR2
-- Halen84 menu base
