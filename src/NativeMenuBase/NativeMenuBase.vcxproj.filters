@@ -22,9 +22,6 @@
     <ClCompile Include="scanner.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\inc\enums.h">
-      <Filter>include</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\inc\natives.h">
       <Filter>include</Filter>
     </ClInclude>

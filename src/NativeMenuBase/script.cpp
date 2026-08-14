@@ -17,10 +17,6 @@
 #define AUTOCRAFT_DIAGNOSTIC 0
 #endif
 
-#ifndef AUTOCRAFT_TRACE
-#define AUTOCRAFT_TRACE 0
-#endif
-
 namespace
 {
 	constexpr int kCraftBatchLimit = 50;
@@ -75,7 +71,7 @@ namespace
 			|| text == "CAMP_REC_MAKE";
 	}
 
-#if AUTOCRAFT_DIAGNOSTIC || AUTOCRAFT_TRACE
+#if AUTOCRAFT_DIAGNOSTIC
 	diagnostic::Record MakeRecord(std::string_view event)
 	{
 		diagnostic::Record record;
@@ -89,47 +85,8 @@ namespace
 	}
 #endif
 
-#if AUTOCRAFT_TRACE
-	void TraceBatchState(
-		std::string_view event,
-		std::optional<Hash> subject_hash = std::nullopt,
-		std::optional<int> result = std::nullopt,
-		std::optional<Prompt> prompt = std::nullopt,
-		std::string_view text = {})
-	{
-		auto record = MakeRecord(event);
-		record.subject_hash = subject_hash;
-		record.before_count = remaining_batch_crafts;
-		record.after_count = completed_batch_crafts;
-		record.capacity = force_safe_breakout ? 1 : 0;
-		record.quantity = pending_menu_refresh ? 1 : 0;
-		record.result = result;
-		record.prompt = prompt;
-		record.text = text;
-		diagnostic::Write(record);
-	}
-
-	void TraceAmmoNative(Ped ped, Hash ammo_type, int quantity, int before_count, int after_count)
-	{
-		auto record = MakeRecord("BATCH_AMMO_NATIVE");
-		record.owner_id = ped;
-		record.subject_hash = ammo_type;
-		record.quantity = quantity;
-		record.before_count = before_count;
-		record.after_count = after_count;
-		diagnostic::Write(record);
-	}
-
-	#define TRACE_BATCH(...) TraceBatchState(__VA_ARGS__)
-	#define TRACE_AMMO_NATIVE(...) TraceAmmoNative(__VA_ARGS__)
-#else
-	#define TRACE_BATCH(...) ((void)0)
-	#define TRACE_AMMO_NATIVE(...) ((void)0)
-#endif
-
 	void FinishBatch()
 	{
-		TRACE_BATCH("BATCH_FINISH_BEGIN");
 		remaining_batch_crafts = 0;
 		force_safe_breakout = false;
 		forced_commit_frame = -1;
@@ -142,7 +99,6 @@ namespace
 			pending_menu_refresh = true;
 		}
 		completed_batch_crafts = 0;
-		TRACE_BATCH("BATCH_FINISH_END");
 	}
 
 	void RefreshCraftingMenu()
@@ -154,7 +110,6 @@ namespace
 		if (auto refresh_flag = getGlobalPtr(kCraftMenuRefreshGlobal); refresh_flag != nullptr) {
 			*refresh_flag = 1;
 			pending_menu_refresh = false;
-			TRACE_BATCH("MENU_REFRESH_WRITE", std::nullopt, 1);
 		}
 	}
 
@@ -438,8 +393,6 @@ namespace
 					if (std::string_view(prompt_text) == "CAMP_REC_MAKE") {
 						recipe_menu_prompt = tracked_crafting_prompt;
 					}
-					TRACE_BATCH("BATCH_PROMPT_TEXT", std::nullopt, std::nullopt,
-						tracked_crafting_prompt, prompt_text);
 				}
 			}
 			CALL();
@@ -453,9 +406,6 @@ namespace
 			}
 
 			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
-			if (pressed || prompt == recipe_menu_prompt) {
-				TRACE_BATCH("BATCH_PROMPT_QUERY", std::nullopt, pressed ? 1 : 0, prompt);
-			}
 			if (prompt == recipe_menu_prompt && !pressed) {
 				RefreshCraftingMenu();
 			}
@@ -469,7 +419,6 @@ namespace
 				awaiting_batch_ammo_add = false;
 				craft_succeeded_since_safe_breakout = false;
 				batch_popup_shown = false;
-				TRACE_BATCH("BATCH_ARM", std::nullopt, 1, prompt);
 			}
 		});
 
@@ -479,11 +428,6 @@ namespace
 			if (!IsCraftingScript()) {
 				return;
 			}
-			if (event_hash == kCraftCommitEvent || event_hash == kSafeBreakoutEvent) {
-				TRACE_BATCH("BATCH_ANIM_EVENT", event_hash,
-					*ctx->get_return_value<BOOL>() != 0 ? 1 : 0);
-			}
-
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				if (!awaiting_batch_ammo_add) {
 					forced_commit_frame = MISC::GET_FRAME_COUNT();
@@ -502,13 +446,11 @@ namespace
 					// still validated by RDR2 before it can add any ammo.
 					ctx->set_return_value<BOOL>(false);
 					craft_succeeded_since_safe_breakout = false;
-					TRACE_BATCH("BATCH_BREAKOUT_SUPPRESSED", event_hash, 0);
 				}
 				else if (remaining_batch_crafts > 0 && game_wants_to_exit) {
 					// RDR2 declined the next transaction because of ingredients or
 					// capacity, so preserve its normal partial-batch exit.
 					FinishBatch();
-					TRACE_BATCH("BATCH_BREAKOUT_ON_FAILURE", event_hash, 1);
 				}
 				else if (remaining_batch_crafts > 0
 					&& awaiting_batch_ammo_add
@@ -517,7 +459,6 @@ namespace
 					// script variant neither adds ammo nor emits its normal exit event.
 					ctx->set_return_value<BOOL>(true);
 					FinishBatch();
-					TRACE_BATCH("BATCH_BREAKOUT_ON_TIMEOUT", event_hash, 1);
 				}
 			}
 		});
@@ -525,7 +466,6 @@ namespace
 		NHOOK("_INVENTORY_ADD_ITEM_WITH_GUID", 0xCB5D11F9508A928D, {
 			CALL();
 			if (IsCraftingScript() && remaining_batch_crafts > 0) {
-				TRACE_BATCH("BATCH_CANCEL_ITEM_ADD");
 				remaining_batch_crafts = 0;
 				completed_batch_crafts = 0;
 				forced_commit_frame = -1;
@@ -545,7 +485,6 @@ namespace
 			const int before_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
 			CALL();
 			const int after_count = WEAPON::GET_PED_AMMO_BY_TYPE(ped, ammo_type);
-			TRACE_AMMO_NATIVE(ped, ammo_type, ctx->get_arg<int>(2), before_count, after_count);
 			if (after_count <= before_count) {
 				return;
 			}
@@ -571,7 +510,6 @@ namespace
 			if (remaining_batch_crafts == 0) {
 				force_safe_breakout = true;
 			}
-			TRACE_BATCH("BATCH_AMMO_STATE", ammo_type, after_count > before_count ? 1 : 0);
 		});
 
 		NHOOK("_UI_FEED_POST_SAMPLE_TOAST_RIGHT", 0xB249EBCB30DD88E0, {
@@ -594,7 +532,7 @@ void ScriptMain()
 	AllocateConsole("Debug");
 #endif
 
-#if AUTOCRAFT_DIAGNOSTIC || AUTOCRAFT_TRACE
+#if AUTOCRAFT_DIAGNOSTIC
 	if (!diagnostic::Initialize()) {
 		PRINT_ERROR("Initialization failed: diagnostic log could not be opened.");
 		return;

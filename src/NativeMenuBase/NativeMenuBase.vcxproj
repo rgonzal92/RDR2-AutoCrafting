@@ -9,10 +9,6 @@
       <Configuration>Diagnostic</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Trace|x64">
-      <Configuration>Trace</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\lib\MinHook\src\buffer.c" />
@@ -29,7 +25,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\inc\main.h" />
-    <ClInclude Include="..\..\inc\enums.h" />
     <ClInclude Include="..\..\inc\MinHook.h" />
     <ClInclude Include="..\..\inc\natives.h" />
     <ClInclude Include="..\..\inc\types.h" />
@@ -55,7 +50,7 @@
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' Or '$(Configuration)|$(Platform)'=='Diagnostic|x64' Or '$(Configuration)|$(Platform)'=='Trace|x64'" Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' Or '$(Configuration)|$(Platform)'=='Diagnostic|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
@@ -65,7 +60,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' Or '$(Configuration)|$(Platform)'=='Diagnostic|x64' Or '$(Configuration)|$(Platform)'=='Trace|x64'" Label="PropertySheets">
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' Or '$(Configuration)|$(Platform)'=='Diagnostic|x64'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
@@ -83,14 +78,7 @@
     <IntDir>tmp\$(Configuration)\</IntDir>
     <TargetName>AutoCraftDiagnostic</TargetName>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Trace|x64'">
-    <LinkIncremental>false</LinkIncremental>
-    <TargetExt>.asi</TargetExt>
-    <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>tmp\$(Configuration)\</IntDir>
-    <TargetName>AutoCraftTrace</TargetName>
-  </PropertyGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' Or '$(Configuration)|$(Platform)'=='Diagnostic|x64' Or '$(Configuration)|$(Platform)'=='Trace|x64'">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' Or '$(Configuration)|$(Platform)'=='Diagnostic|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <PrecompiledHeader>
@@ -118,11 +106,6 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Diagnostic|x64'">
     <ClCompile>
       <PreprocessorDefinitions>AUTOCRAFT_DIAGNOSTIC=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Trace|x64'">
-    <ClCompile>
-      <PreprocessorDefinitions>AUTOCRAFT_TRACE=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
