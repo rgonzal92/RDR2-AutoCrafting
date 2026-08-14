@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# AutoCraft build outputs (vcxproj OutDir/IntDir)
+src/build/
+src/AutoCraft/tmp/
