@@ -619,9 +619,10 @@ namespace
 	}
 
 	// Result codes for one attempted cooking exchange, written to the trace.
+	// Code 3 (at-capacity) is retired: the removed slot-limit pre-check was
+	// the only emitter and it vetoed valid batches on untrustworthy data.
 	constexpr int kCookExchangeOk = 1;
 	constexpr int kCookExchangeNoHandler = 2;
-	constexpr int kCookExchangeAtCapacity = 3;
 	constexpr int kCookExchangeIngredientShort = 4;
 	constexpr int kCookExchangeRemoveMismatch = 5;
 	constexpr int kCookExchangeGrantMismatch = 6;
@@ -643,24 +644,15 @@ namespace
 		rage::scrNativeHandler grant,
 		int output_inventory_id,
 		Hash output_item,
-		Hash output_slot,
 		int output_quantity)
 	{
 		if (grant == nullptr) {
 			return kCookExchangeNoHandler;
 		}
-		// The slot-limit query is only trustworthy when it returns a positive
-		// limit: traces showed it returning zero for items the game itself
-		// kept granting. Honor real data; otherwise the game's own add call
-		// arbitrates capacity below.
-		const int slot_max = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(output_item, output_slot);
-		if (slot_max > 0) {
-			const int output_count = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
-				output_inventory_id, output_item, false);
-			if (output_count + output_quantity > slot_max) {
-				return kCookExchangeAtCapacity;
-			}
-		}
+		// Deliberately no capacity pre-check: _GET_ITEM_SLOT_MAX_COUNT proved
+		// untrustworthy in traces (zero for stackable items, and the held-item
+		// slot's limit for campfire grants). The game's own add call below is
+		// the capacity arbiter — a refused add consumes nothing.
 
 		// Every ingredient must be available BEFORE granting: the payment
 		// below must never be able to fail once the output has been granted.
@@ -1010,10 +1002,15 @@ namespace
 
 			const int granted_per_cook = after_count - before_count;
 			Trace("COOK_GRANT", inventory_id, item, granted_per_cook);
+			// Informational: owner = queried slot limit, subject = slot hash,
+			// quantity = output count after the game's grant. The exchange no
+			// longer decides anything from these values.
+			Trace("COOK_SLOT_INFO",
+				INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(item, slot), slot, after_count);
 			internal_inventory_op = true;
 			for (int extra = 1; extra < kCookBatchSize; ++extra) {
 				const int status =
-					TryCookExtraExchange(ctx, original, inventory_id, item, slot, granted_per_cook);
+					TryCookExtraExchange(ctx, original, inventory_id, item, granted_per_cook);
 				Trace("COOK_EXTRA", std::nullopt, item, extra, status);
 				if (status != kCookExchangeOk) {
 					break;
