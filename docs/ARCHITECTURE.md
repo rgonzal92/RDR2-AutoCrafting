@@ -122,7 +122,7 @@ not apply there, so AutoCraft does two things instead:
   so one manual cook continues through the whole stack hands-free.
 - **Batched output per animation**: when the game grants the cooked item, it
   has already validated and paid for exactly one cook. AutoCraft repeats that
-  complete exchange up to 10 times inside the same animation: for each extra
+  complete exchange up to 50 times inside the same animation: for each extra
   output it first confirms every recorded ingredient of the set is still
   available, then re-runs the game's own grant, and only after the game
   actually added the output does it remove one full ingredient set —

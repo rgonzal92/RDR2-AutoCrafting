@@ -8,7 +8,7 @@ and stops when ingredients run out or the output reaches capacity.
 
 Cooking at a campfire is automated and batched: after one manual cook, the
 cook, stow, and cook-again prompts complete on their own, and each cooking
-animation produces up to 10 cooked items — every extra one paid for with a
+animation produces up to 50 cooked items — every extra one paid for with a
 verified full ingredient set and stopped by satchel capacity.
 
 AutoCraft is always enabled and has no custom menu or keyboard shortcut. One

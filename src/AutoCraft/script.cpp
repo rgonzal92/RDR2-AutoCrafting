@@ -131,7 +131,7 @@ namespace
 	// grants the cooked item later from an animation event. The removals are
 	// recorded so the grant hook can repeat the complete, verified exchange
 	// for extra outputs inside the same animation.
-	constexpr int kCookBatchSize = 10;
+	constexpr int kCookBatchSize = kCraftBatchLimit;
 	constexpr int kMaxCookIngredients = 4;
 	// Fallback stack limit when no slot query yields a sane answer. Kept well
 	// below the standard 99 provision cap so the batch can never push an item
