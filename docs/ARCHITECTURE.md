@@ -126,10 +126,12 @@ not apply there, so AutoCraft does two things instead:
   output it first confirms every recorded ingredient of the set is still
   available, then re-runs the game's own grant, and only after the game
   actually added the output does it remove one full ingredient set —
-  verifying each count change. If the game's add refuses (its own capacity
-  arbitration), nothing was consumed and the batch stops. This is the
-  original mod's "3 per animation" idea with per-item verification, so
-  ingredients can never be consumed without a matching output.
+  verifying each count change. The batch stops one grant below the item's
+  verified satchel stack limit: the game's scripts never call the add native
+  at capacity, and traces showed that a refused add wedges the cooking flow,
+  so the boundary is always left to the game's own pre-checked path. Items
+  without a trustworthy limit are not batched. Ingredients can never be
+  consumed without a matching output.
 - **Automation only presses enabled prompts**: the cooking script's ONLY
   out-of-ingredients guard is leaving the cook-again prompt disabled — its
   press-reading function does not check the disabled state, its ingredient

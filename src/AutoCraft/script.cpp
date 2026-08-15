@@ -627,13 +627,13 @@ namespace
 	}
 
 	// Result codes for one attempted cooking exchange, written to the trace.
-	// Code 3 (at-capacity) is retired: the removed slot-limit pre-check was
-	// the only emitter and it vetoed valid batches on untrustworthy data.
 	constexpr int kCookExchangeOk = 1;
 	constexpr int kCookExchangeNoHandler = 2;
+	constexpr int kCookExchangeAtCapacity = 3;
 	constexpr int kCookExchangeIngredientShort = 4;
 	constexpr int kCookExchangeRemoveMismatch = 5;
 	constexpr int kCookExchangeGrantMismatch = 6;
+	constexpr int kCookExchangeNoLimitData = 7;
 
 	/**
 	 * Performs one additional cooking exchange inside the current grant call:
@@ -652,15 +652,26 @@ namespace
 		rage::scrNativeHandler grant,
 		int output_inventory_id,
 		Hash output_item,
-		int output_quantity)
+		int output_quantity,
+		int output_limit)
 	{
 		if (grant == nullptr) {
 			return kCookExchangeNoHandler;
 		}
-		// Deliberately no capacity pre-check: _GET_ITEM_SLOT_MAX_COUNT proved
-		// untrustworthy in traces (zero for stackable items, and the held-item
-		// slot's limit for campfire grants). The game's own add call below is
-		// the capacity arbiter — a refused add consumes nothing.
+		// The game's scripts always pre-check capacity and never call the add
+		// native when a slot is full; a refused add is an untested game path
+		// and it wedged the cooking flow in traces. The batch must therefore
+		// stop BEFORE the boundary: one grant of margin below the verified
+		// limit, so the game's own pre-checked flow handles the last unit.
+		// Without a trustworthy limit there is no safe way to batch at all.
+		if (output_limit < 0) {
+			return kCookExchangeNoLimitData;
+		}
+		const int output_count_now = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+			output_inventory_id, output_item, false);
+		if (output_count_now + 2 * output_quantity > output_limit) {
+			return kCookExchangeAtCapacity;
+		}
 
 		// Every ingredient must be available BEFORE granting: the payment
 		// below must never be able to fail once the output has been granted.
@@ -1022,15 +1033,31 @@ namespace
 
 			const int granted_per_cook = after_count - before_count;
 			Trace("COOK_GRANT", inventory_id, item, granted_per_cook);
-			// Informational: owner = queried slot limit, subject = slot hash,
-			// quantity = output count after the game's grant. The exchange no
-			// longer decides anything from these values.
-			Trace("COOK_SLOT_INFO",
-				INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(item, slot), slot, after_count);
+
+			// Derive a trustworthy stack limit for the cooked item. The grant's
+			// own slot argument returns garbage for some items, and consumables
+			// actually stack in the satchel slot, so query both and keep only
+			// answers that pass the sanity test: a real limit can never be
+			// smaller than the count already held. In the trace: owner = the
+			// queried limit, subject = the slot hash, quantity = current count.
+			const Hash satchel_slot = MISC::GET_HASH_KEY("SLOTID_SATCHEL");
+			const int grant_slot_limit = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(item, slot);
+			const int satchel_limit = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(item, satchel_slot);
+			Trace("COOK_SLOT_INFO", grant_slot_limit, slot, after_count);
+			Trace("COOK_SLOT_INFO2", satchel_limit, satchel_slot, after_count);
+			int output_limit = -1;
+			if (grant_slot_limit > 0 && grant_slot_limit >= after_count) {
+				output_limit = grant_slot_limit;
+			}
+			if (satchel_limit > 0 && satchel_limit >= after_count
+				&& (output_limit < 0 || satchel_limit < output_limit)) {
+				output_limit = satchel_limit;
+			}
+
 			internal_inventory_op = true;
 			for (int extra = 1; extra < kCookBatchSize; ++extra) {
-				const int status =
-					TryCookExtraExchange(ctx, original, inventory_id, item, granted_per_cook);
+				const int status = TryCookExtraExchange(
+					ctx, original, inventory_id, item, granted_per_cook, output_limit);
 				Trace("COOK_EXTRA", std::nullopt, item, extra, status);
 				if (status != kCookExchangeOk) {
 					break;
