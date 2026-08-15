@@ -618,6 +618,14 @@ namespace
 		}
 	}
 
+	// Result codes for one attempted cooking exchange, written to the trace.
+	constexpr int kCookExchangeOk = 1;
+	constexpr int kCookExchangeNoHandler = 2;
+	constexpr int kCookExchangeAtCapacity = 3;
+	constexpr int kCookExchangeIngredientShort = 4;
+	constexpr int kCookExchangeRemoveMismatch = 5;
+	constexpr int kCookExchangeGrantMismatch = 6;
+
 	/**
 	 * Performs one additional cooking exchange inside the current grant call:
 	 * verifies output capacity and ingredient availability, removes one full
@@ -627,9 +635,10 @@ namespace
 	 * All checks and the exchange run inside one native call on the script
 	 * thread, so a verified count cannot change before it is used.
 	 *
-	 * @return false when no further exchange is possible; the batch stops.
+	 * @return kCookExchangeOk when one extra output was granted; any other
+	 *         code stops the batch and names the reason in the trace.
 	 */
-	bool TryCookExtraExchange(
+	int TryCookExtraExchange(
 		rage::scrNativeCallContext* ctx,
 		rage::scrNativeHandler grant,
 		int output_inventory_id,
@@ -637,16 +646,19 @@ namespace
 		Hash output_slot,
 		int output_quantity)
 	{
-		// The output slot's limit must be known and leave room for one more
-		// grant; otherwise ingredients would be consumed for nothing.
-		const int slot_max = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(output_item, output_slot);
-		if (slot_max <= 0 || grant == nullptr) {
-			return false;
+		if (grant == nullptr) {
+			return kCookExchangeNoHandler;
 		}
-		const int output_count = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
-			output_inventory_id, output_item, false);
-		if (output_count + output_quantity > slot_max) {
-			return false;
+		// Mirror the game's own capacity predicate: a negative slot limit
+		// means the stack is unlimited, zero means no room, positive is a
+		// real limit that must leave space for one more grant.
+		const int slot_max = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(output_item, output_slot);
+		if (slot_max >= 0) {
+			const int output_count = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+				output_inventory_id, output_item, false);
+			if (output_count + output_quantity > slot_max) {
+				return kCookExchangeAtCapacity;
+			}
 		}
 
 		// Draining the stack to zero here is safe: the game re-evaluates its
@@ -657,7 +669,7 @@ namespace
 			const CookIngredient& ingredient = cook_cycle_ingredients[i];
 			if (INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 					ingredient.inventory_id, ingredient.item, false) < ingredient.quantity) {
-				return false;
+				return kCookExchangeIngredientShort;
 			}
 		}
 
@@ -670,7 +682,7 @@ namespace
 			const int after = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 				ingredient.inventory_id, ingredient.item, false);
 			if (before - after != ingredient.quantity) {
-				return false;
+				return kCookExchangeRemoveMismatch;
 			}
 		}
 
@@ -682,7 +694,10 @@ namespace
 		grant(ctx);
 		const int after_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 			output_inventory_id, output_item, false);
-		return after_output - before_output == output_quantity;
+		if (after_output - before_output != output_quantity) {
+			return kCookExchangeGrantMismatch;
+		}
+		return kCookExchangeOk;
 	}
 
 	/** Requests RDR2's own recipe-menu rebuild after a multi-craft batch. */
@@ -990,10 +1005,10 @@ namespace
 			Trace("COOK_GRANT", inventory_id, item, granted_per_cook);
 			internal_inventory_op = true;
 			for (int extra = 1; extra < kCookBatchSize; ++extra) {
-				const bool exchanged =
+				const int status =
 					TryCookExtraExchange(ctx, original, inventory_id, item, slot, granted_per_cook);
-				Trace("COOK_EXTRA", std::nullopt, item, extra, exchanged ? 1 : 0);
-				if (!exchanged) {
+				Trace("COOK_EXTRA", std::nullopt, item, extra, status);
+				if (status != kCookExchangeOk) {
 					break;
 				}
 			}
