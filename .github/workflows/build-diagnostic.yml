@@ -25,9 +25,19 @@ jobs:
       - name: Build diagnostic x64
         run: msbuild src/AutoCraft.sln /m /p:Configuration=Diagnostic /p:Platform=x64
 
+      - name: Build trace x64
+        run: msbuild src/AutoCraft.sln /m /p:Configuration=Trace /p:Platform=x64
+
       - name: Upload diagnostic ASI
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: AutoCraft-ammo-diagnostic
           path: src/build/Diagnostic/AutoCraftDiagnostic.asi
+          if-no-files-found: error
+
+      - name: Upload trace ASI
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: AutoCraft-trace
+          path: src/build/Trace/AutoCraftTrace.asi
           if-no-files-found: error

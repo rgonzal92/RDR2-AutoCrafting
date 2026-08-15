@@ -129,12 +129,19 @@ not apply there, so AutoCraft does two things instead:
   batch stops at the first shortage or full slot. This is the original mod's
   "3 per animation" idea with per-item verification, so ingredients can never
   be consumed without a matching output.
-- **One set always stays in reserve**: the exchange never consumes the last
-  full ingredient set. The cooking script keeps its own expectations about
-  remaining ingredients, and draining them behind its back makes the auto
-  cook-again start an unpayable cook that wedges the player at the fire.
-  Leaving a set guarantees the stack ends through the game's own normal
-  out-of-ingredients flow, which exits cleanly.
+- **Automation only presses enabled prompts**: the cooking script's ONLY
+  out-of-ingredients guard is leaving the cook-again prompt disabled — its
+  press-reading function does not check the disabled state, its ingredient
+  removal failure is discarded, and its grant is unconditional. A press forced
+  through a disabled prompt therefore starts an unpayable cook that grants a
+  free item and can wedge the player in a state with no prompts and no
+  timeout. AutoCraft tracks every `_UI_PROMPT_SET_ENABLED` call and its
+  automation acts only on prompts the game currently has enabled. Because the
+  game re-evaluates that enabled state from live inventory after each cook,
+  it correctly accounts for ingredients the batch exchange consumed.
+- **One set stays in reserve** as defense in depth: the exchange never
+  consumes the last full ingredient set, so the stack always ends through the
+  game's own normal out-of-ingredients flow.
 
 The mod never forces the "meat is done" animation event: the camp script polls
 it continuously, so forcing it would grant items every frame and again when
@@ -180,14 +187,23 @@ is created only after RDR2's own transaction succeeds.
 | `src/AutoCraft/diagnostic_logger.*` | Tab-separated logging used by the Diagnostic build. |
 | `docs/AMMO_DIAGNOSTICS.md` | Safe procedure for a logging-only investigation. |
 
-## Diagnostic build
+## Diagnostic and Trace builds
 
 The `Diagnostic|x64` configuration produces `AutoCraftDiagnostic.asi`. It does
 not batch crafts, modify native arguments, or alter native return values. It
 only records normal RDR2 calls to `AutoCraft-diagnostic.log` beside the ASI.
 
-Never load `AutoCraft.asi` and `AutoCraftDiagnostic.asi` together. See
-[`AMMO_DIAGNOSTICS.md`](AMMO_DIAGNOSTICS.md) before using the Diagnostic build.
+The `Trace|x64` configuration produces `AutoCraftTrace.asi`: the normal build
+plus a decision log. Behavior is identical to `AutoCraft.asi`, and every
+batching decision (prompt tracking, enable states, forced presses, craft
+counts, cooking exchanges, batch endings) is appended to
+`AutoCraft-diagnostic.log`. Use it to verify a new build in-game: one play
+session produces an evidence log instead of a symptom description.
+
+Only ever load ONE AutoCraft ASI at a time — the loader loads every `*.asi`
+file in the game folder, so backups must not be stored there with an `.asi`
+extension. See [`AMMO_DIAGNOSTICS.md`](AMMO_DIAGNOSTICS.md) before using the
+Diagnostic build.
 
 ## Updating RDR2 or native declarations
 

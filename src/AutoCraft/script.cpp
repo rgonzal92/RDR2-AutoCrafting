@@ -20,6 +20,13 @@
 #define AUTOCRAFT_DIAGNOSTIC 0
 #endif
 
+// The Trace build is the normal build plus a decision log: identical hooks and
+// behavior, with every batching decision written to AutoCraft-diagnostic.log
+// so a play session produces evidence instead of anecdotes.
+#ifndef AUTOCRAFT_TRACE
+#define AUTOCRAFT_TRACE 0
+#endif
+
 namespace
 {
 	// The maximum number of successful game-validated ammo crafts per action.
@@ -95,8 +102,18 @@ namespace
 	int last_craft_success_frame = -1;
 	// Cooking-flow prompts converted to fast auto-fill holds (the original
 	// upstream mechanism). A small ring buffer: several coexist while cooking.
+	// The enabled flag mirrors the game's _UI_PROMPT_SET_ENABLED calls: leaving
+	// a prompt disabled is the cooking flow's ONLY ingredient/capacity guard
+	// (the press-reading script function does not check it, and a cook started
+	// without ingredients both grants a free item and can wedge the player in
+	// a promptless state), so automation must never act on a disabled prompt.
 	constexpr int kMaxCookPrompts = 4;
-	Prompt cook_prompts[kMaxCookPrompts] = {};
+	struct CookPrompt
+	{
+		Prompt handle;
+		bool enabled;
+	};
+	CookPrompt cook_prompts[kMaxCookPrompts] = {};
 	int cook_prompt_cursor = 0;
 
 	// One cooking cycle removes its ingredient set when the cook starts and
@@ -446,6 +463,29 @@ namespace
 		});
 	}
 #else
+#if AUTOCRAFT_TRACE
+	/** Writes one mod-decision record to the trace log (Trace builds only). */
+	void Trace(std::string_view event,
+		std::optional<std::int64_t> owner = std::nullopt,
+		std::optional<std::uint32_t> subject = std::nullopt,
+		std::optional<int> quantity = std::nullopt,
+		std::optional<int> result = std::nullopt)
+	{
+		diagnostic::Record record;
+		record.event = event;
+		record.frame = MISC::GET_FRAME_COUNT();
+		record.script_hash = CurrentScriptHash();
+		record.owner_id = owner;
+		record.subject_hash = subject;
+		record.quantity = quantity;
+		record.result = result;
+		diagnostic::Write(record);
+	}
+#else
+	template <typename... Args>
+	void Trace(Args&&...) {}
+#endif
+
 	/** Returns whether a prompt label belongs to the cooking/fire-crafting flow. */
 	bool IsCookFlowPromptText(std::string_view text)
 	{
@@ -455,40 +495,51 @@ namespace
 			|| text == "CAMP_REC_MAKE_AGN";
 	}
 
-	bool IsCookPrompt(Prompt prompt)
+	CookPrompt* FindCookPrompt(Prompt prompt)
 	{
 		if (prompt == 0) {
-			return false;
+			return nullptr;
 		}
-		for (const Prompt tracked : cook_prompts) {
-			if (tracked == prompt) {
-				return true;
+		for (CookPrompt& tracked : cook_prompts) {
+			if (tracked.handle == prompt) {
+				return &tracked;
 			}
 		}
-		return false;
+		return nullptr;
 	}
 
 	void TrackCookPrompt(Prompt prompt)
 	{
-		if (IsCookPrompt(prompt)) {
+		if (FindCookPrompt(prompt) != nullptr) {
 			return;
 		}
-		cook_prompts[cook_prompt_cursor] = prompt;
+		// The game enables a prompt as part of registering it; assume enabled
+		// until a _UI_PROMPT_SET_ENABLED call says otherwise.
+		cook_prompts[cook_prompt_cursor] = CookPrompt{prompt, true};
 		cook_prompt_cursor = (cook_prompt_cursor + 1) % kMaxCookPrompts;
 	}
 
 	void ForgetCookPrompt(Prompt prompt)
 	{
-		for (Prompt& tracked : cook_prompts) {
-			if (tracked == prompt) {
-				tracked = 0;
+		for (CookPrompt& tracked : cook_prompts) {
+			if (tracked.handle == prompt) {
+				tracked = CookPrompt{};
 			}
 		}
+	}
+
+	/** Returns whether automation may act on this cooking prompt right now. */
+	bool IsActiveCookPrompt(Prompt prompt)
+	{
+		const CookPrompt* tracked = FindCookPrompt(prompt);
+		return tracked != nullptr && tracked->enabled;
 	}
 
 	/** Resets transient batch state after RDR2 completes or rejects a craft. */
 	void FinishBatch()
 	{
+		Trace("BATCH_FINISH", std::nullopt, std::nullopt, completed_batch_crafts,
+			item_batch ? 1 : 0);
 		remaining_batch_crafts = 0;
 		force_safe_breakout = false;
 		forced_commit_frame = -1;
@@ -508,6 +559,8 @@ namespace
 	/** Records one successful, game-validated craft and advances the batch. */
 	void CountBatchCraft(bool is_item_craft)
 	{
+		Trace("CRAFT_COUNTED", std::nullopt, std::nullopt, remaining_batch_crafts,
+			is_item_craft ? 1 : 0);
 		forced_commit_frame = -1;
 		awaiting_batch_output = false;
 		item_batch = is_item_craft;
@@ -643,6 +696,7 @@ namespace
 						tracked_crafting_prompt = prompt;
 						tracked_prompt_is_make = true;
 						ForgetCookPrompt(prompt);
+						Trace("TRACK_MAKE", prompt);
 					}
 					else if (text == "CAMP_REC_COOK" || text == "CAMP_REC_BREW") {
 						// Cook/brew recipes relabel the same menu prompt and route
@@ -659,6 +713,13 @@ namespace
 							tracked_prompt_is_make = false;
 						}
 						convert_cook_prompt = true;
+						Trace("TRACK_COOK", prompt);
+					}
+					else {
+						// The game deletes and recreates prompts freely, so a
+						// recycled handle relabeled to anything unrelated must
+						// drop out of the cooking set.
+						ForgetCookPrompt(prompt);
 					}
 				}
 			}
@@ -677,20 +738,29 @@ namespace
 		NHOOK("_UI_PROMPT_REGISTER_END", 0xF7AA2696A22AD8B9, {
 			const Prompt prompt = ctx->get_arg<Prompt>(0);
 			CALL();
-			if (IsCraftingScript() && IsCookPrompt(prompt)) {
+			if (IsCraftingScript() && FindCookPrompt(prompt) != nullptr) {
 				HUD::_UI_PROMPT_SET_HOLD_AUTO_FILL_MODE(prompt, kCookAutoFillMs, kCookHoldMs);
 			}
 		});
 
 		NHOOK("_UI_PROMPT_SET_ENABLED", 0x8A0FB4D03A630D21, {
-			if (IsCraftingScript() && ctx->get_arg<Prompt>(0) == tracked_crafting_prompt) {
-				make_prompt_enabled = ctx->get_arg<BOOL>(1) != 0;
-				// After each item craft the game re-enables the MAKE prompt only
-				// when another craft passed its ingredient and capacity checks. A
-				// final "disabled" verdict with no craft in flight ends the batch.
-				if (item_batch && !awaiting_batch_output && !make_prompt_enabled
-					&& remaining_batch_crafts > 0) {
-					FinishBatch();
+			if (IsCraftingScript()) {
+				const Prompt prompt = ctx->get_arg<Prompt>(0);
+				const bool enabled = ctx->get_arg<BOOL>(1) != 0;
+				if (prompt == tracked_crafting_prompt) {
+					Trace("MAKE_ENABLED", prompt, std::nullopt, std::nullopt, enabled ? 1 : 0);
+					make_prompt_enabled = enabled;
+					// After each item craft the game re-enables the MAKE prompt only
+					// when another craft passed its ingredient and capacity checks. A
+					// final "disabled" verdict with no craft in flight ends the batch.
+					if (item_batch && !awaiting_batch_output && !make_prompt_enabled
+						&& remaining_batch_crafts > 0) {
+						FinishBatch();
+					}
+				}
+				if (CookPrompt* cook_prompt = FindCookPrompt(prompt); cook_prompt != nullptr) {
+					Trace("COOK_ENABLED", prompt, std::nullopt, std::nullopt, enabled ? 1 : 0);
+					cook_prompt->enabled = enabled;
 				}
 			}
 			CALL();
@@ -707,8 +777,13 @@ namespace
 
 			// Cooking flow: report a completed self-filling hold as a press so
 			// the script advances through cook, stow, and cook-again on its own.
-			if (!pressed && IsCookPrompt(prompt)
+			// Only for prompts the game currently has enabled: a disabled
+			// cook-again prompt is the game's sole out-of-ingredients guard, and
+			// pressing through it starts an unpayable cook that grants a free
+			// item and can wedge the player in a promptless cooking state.
+			if (!pressed && IsActiveCookPrompt(prompt)
 				&& HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt)) {
+				Trace("COOK_PRESS", prompt);
 				ctx->set_return_value<BOOL>(true);
 				return;
 			}
@@ -733,6 +808,7 @@ namespace
 						FinishBatch();
 					}
 					else if (make_prompt_enabled) {
+						Trace("FORCE_PRESS", prompt, std::nullopt, remaining_batch_crafts);
 						ctx->set_return_value<BOOL>(true);
 						awaiting_batch_output = true;
 						forced_commit_frame = MISC::GET_FRAME_COUNT();
@@ -743,6 +819,7 @@ namespace
 
 			// A real press arms a full batch. The first craft selected from the
 			// recipe list arms itself when its first output add succeeds below.
+			Trace("BATCH_ARMED", prompt);
 			remaining_batch_crafts = kCraftBatchLimit;
 			completed_batch_crafts = 0;
 			force_safe_breakout = false;
@@ -830,6 +907,8 @@ namespace
 					ingredient.reason = ctx->get_arg<Hash>(3);
 					++cook_cycle_ingredient_count;
 					cook_cycle_last_frame = frame;
+					Trace("COOK_INGREDIENT", ingredient.inventory_id, ingredient.item,
+						ingredient.quantity);
 				}
 			}
 			CALL();
@@ -874,9 +953,13 @@ namespace
 			}
 
 			const int granted_per_cook = after_count - before_count;
+			Trace("COOK_GRANT", inventory_id, item, granted_per_cook);
 			internal_inventory_op = true;
 			for (int extra = 1; extra < kCookBatchSize; ++extra) {
-				if (!TryCookExtraExchange(ctx, original, inventory_id, item, slot, granted_per_cook)) {
+				const bool exchanged =
+					TryCookExtraExchange(ctx, original, inventory_id, item, slot, granted_per_cook);
+				Trace("COOK_EXTRA", std::nullopt, item, extra, exchanged ? 1 : 0);
+				if (!exchanged) {
 					break;
 				}
 			}
@@ -927,6 +1010,7 @@ namespace
 			}
 			CALL();
 			if (shorten) {
+				Trace("ANIM_SHORTENED");
 				ctx->set_return_value(kItemCraftShortDuration);
 			}
 		});
@@ -934,7 +1018,7 @@ namespace
 		NHOOK("_UI_PROMPT_IS_PRESSED", 0x21E60E230086697F, {
 			const Prompt prompt = ctx->get_arg<Prompt>(0);
 			CALL();
-			if (IsCraftingScript() && IsCookPrompt(prompt)
+			if (IsCraftingScript() && IsActiveCookPrompt(prompt)
 				&& *ctx->get_return_value<BOOL>() == 0
 				&& HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt)) {
 				ctx->set_return_value<BOOL>(true);
@@ -963,7 +1047,7 @@ void ScriptMain()
 	AllocateConsole("Debug");
 #endif
 
-#if AUTOCRAFT_DIAGNOSTIC
+#if AUTOCRAFT_DIAGNOSTIC || AUTOCRAFT_TRACE
 	if (!diagnostic::Initialize()) {
 		PRINT_ERROR("Initialization failed: diagnostic log could not be opened.");
 		return;
