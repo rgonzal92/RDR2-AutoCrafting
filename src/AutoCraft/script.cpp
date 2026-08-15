@@ -130,10 +130,14 @@ namespace
 	// for extra outputs inside the same animation.
 	constexpr int kCookBatchSize = 10;
 	constexpr int kMaxCookIngredients = 4;
+	// Windows are wall-clock milliseconds from GET_GAME_TIMER. Frame counts
+	// scale with the player's frame rate and proved too short in traces: a
+	// paced cook-and-stow cycle outlived a frame-based window at high fps and
+	// the exchange silently skipped.
 	// A grant older than this cannot belong to the recorded removals anymore.
-	constexpr int kCookCycleFrameWindow = 2400;
+	constexpr int kCookCycleWindowMs = 60000;
 	// Removals separated by more than this belong to a new cooking cycle.
-	constexpr int kCookIngredientGapFrames = 300;
+	constexpr int kCookIngredientGapMs = 5000;
 	struct CookIngredient
 	{
 		Hash item;
@@ -143,7 +147,7 @@ namespace
 	};
 	CookIngredient cook_cycle_ingredients[kMaxCookIngredients] = {};
 	int cook_cycle_ingredient_count = 0;
-	int cook_cycle_last_frame = -1;
+	int cook_cycle_last_ms = 0;
 	// Set while AutoCraft performs its own verified inventory operations so
 	// the hooks below do not record them as game activity.
 	bool internal_inventory_op = false;
@@ -920,9 +924,9 @@ namespace
 		// their own ingredient flow and are never recorded.
 		NHOOK("_INVENTORY_REMOVE_INVENTORY_ITEM_WITH_ITEMID", 0xB4158C8C9A3B5DCE, {
 			if (IsCraftingScript() && !internal_inventory_op && !tracked_prompt_is_make) {
-				const int frame = MISC::GET_FRAME_COUNT();
+				const int now_ms = MISC::GET_GAME_TIMER();
 				if (cook_cycle_ingredient_count > 0
-					&& frame - cook_cycle_last_frame > kCookIngredientGapFrames) {
+					&& now_ms - cook_cycle_last_ms > kCookIngredientGapMs) {
 					cook_cycle_ingredient_count = 0;
 				}
 				if (cook_cycle_ingredient_count < kMaxCookIngredients) {
@@ -932,7 +936,7 @@ namespace
 					ingredient.quantity = ctx->get_arg<int>(2);
 					ingredient.reason = ctx->get_arg<Hash>(3);
 					++cook_cycle_ingredient_count;
-					cook_cycle_last_frame = frame;
+					cook_cycle_last_ms = now_ms;
 					Trace("COOK_INGREDIENT", ingredient.inventory_id, ingredient.item,
 						ingredient.quantity);
 				}
@@ -956,6 +960,9 @@ namespace
 			const int after_count =
 				INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(inventory_id, item, false);
 			if (!result || after_count <= before_count) {
+				// Includes the game's silent at-capacity add failure; traced so a
+				// missing grant is visible in the log.
+				Trace("GRANT_FAILED", inventory_id, item, std::nullopt, result ? 1 : 0);
 				return;
 			}
 
@@ -971,9 +978,12 @@ namespace
 			// that complete exchange for extra outputs inside the same animation,
 			// one verified set at a time, stopping at the first shortage or full
 			// slot. Brewing never grants an item, so it can never reach this path.
-			const int frame = MISC::GET_FRAME_COUNT();
-			if (cook_cycle_ingredient_count == 0
-				|| frame - cook_cycle_last_frame > kCookCycleFrameWindow) {
+			if (cook_cycle_ingredient_count == 0) {
+				Trace("COOK_NO_CYCLE", inventory_id, item);
+				return;
+			}
+			if (MISC::GET_GAME_TIMER() - cook_cycle_last_ms > kCookCycleWindowMs) {
+				Trace("COOK_STALE", inventory_id, item);
 				cook_cycle_ingredient_count = 0;
 				return;
 			}
