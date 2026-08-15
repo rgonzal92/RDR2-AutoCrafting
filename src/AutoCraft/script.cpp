@@ -649,16 +649,14 @@ namespace
 			return false;
 		}
 
-		// The exchange must always leave one full ingredient set untouched. The
-		// cooking script tracks its own ingredient expectations, and if the
-		// exchange drained the last set, the auto cook-again would start a cook
-		// the game cannot pay for and wedge the player at the fire. Leaving a
-		// set means the stack always ends through the game's own normal
-		// out-of-ingredients flow.
+		// Draining the stack to zero here is safe: the game re-evaluates its
+		// cook-again prompt's enabled state from live inventory after every
+		// cook, and automation only ever presses enabled prompts, so the flow
+		// ends through the game's own disabled-prompt path.
 		for (int i = 0; i < cook_cycle_ingredient_count; ++i) {
 			const CookIngredient& ingredient = cook_cycle_ingredients[i];
 			if (INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
-					ingredient.inventory_id, ingredient.item, false) < ingredient.quantity * 2) {
+					ingredient.inventory_id, ingredient.item, false) < ingredient.quantity) {
 				return false;
 			}
 		}

@@ -139,9 +139,10 @@ not apply there, so AutoCraft does two things instead:
   automation acts only on prompts the game currently has enabled. Because the
   game re-evaluates that enabled state from live inventory after each cook,
   it correctly accounts for ingredients the batch exchange consumed.
-- **One set stays in reserve** as defense in depth: the exchange never
-  consumes the last full ingredient set, so the stack always ends through the
-  game's own normal out-of-ingredients flow.
+- **The exchange may consume the whole stack** in one animation: because the
+  game recomputes the cook-again prompt's enabled state from live inventory
+  after every cook and automation only presses enabled prompts, an emptied
+  stack simply leaves the prompt disabled and the flow ends cleanly.
 
 The mod never forces the "meat is done" animation event: the camp script polls
 it continuously, so forcing it would grant items every frame and again when
