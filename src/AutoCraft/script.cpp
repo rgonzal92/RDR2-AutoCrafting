@@ -736,6 +736,10 @@ namespace
 						tracked_crafting_prompt = prompt;
 						tracked_prompt_is_make = true;
 						ForgetCookPrompt(prompt);
+						// Entering menu context invalidates any recorded cooking
+						// cycle, so a menu craft's grant can never be mistaken
+						// for a cooking grant.
+						cook_cycle_ingredient_count = 0;
 						Trace("TRACK_MAKE", prompt, std::nullopt, std::nullopt, std::nullopt, text);
 					}
 					else if (text == "CAMP_REC_COOK" || text == "CAMP_REC_BREW") {
@@ -749,9 +753,13 @@ namespace
 					}
 					else if (IsCookFlowPromptText(text)) {
 						TrackCookPrompt(prompt);
-						if (prompt == tracked_crafting_prompt) {
-							tracked_prompt_is_make = false;
-						}
+						// Cooking-flow prompts only exist while the cooking flow
+						// runs, so seeing one means the recipe menu is gone. The
+						// menu latch must clear even though the cook prompts use
+						// different handles than the menu's MAKE prompt: a stale
+						// latch misroutes cooking grants into the item-batch
+						// path and disables the cook exchange.
+						tracked_prompt_is_make = false;
 						convert_cook_prompt = true;
 						Trace("TRACK_COOK", prompt, std::nullopt, std::nullopt, std::nullopt, text);
 					}
@@ -978,27 +986,31 @@ namespace
 				return;
 			}
 
-			// A confirmed grant is the success signal for menu-recipe item crafts,
-			// mirroring the ammo path below.
-			if (tracked_prompt_is_make) {
-				CountBatchCraft(true);
+			// An active cooking cycle is the strongest context signal: it only
+			// exists while an actual cook is in flight (menu entry clears it),
+			// so it outranks the menu latch when routing this grant.
+			if (cook_cycle_ingredient_count > 0
+				&& MISC::GET_GAME_TIMER() - cook_cycle_last_ms > kCookCycleWindowMs) {
+				Trace("COOK_STALE", inventory_id, item);
+				cook_cycle_ingredient_count = 0;
+			}
+			if (cook_cycle_ingredient_count == 0) {
+				// A confirmed grant is the success signal for menu-recipe item
+				// crafts, mirroring the ammo path below.
+				if (tracked_prompt_is_make) {
+					CountBatchCraft(true);
+				}
+				else {
+					Trace("COOK_NO_CYCLE", inventory_id, item);
+				}
 				return;
 			}
 
 			// Cooking grants land here: the game validated and granted one cooked
 			// item for the ingredient set it removed when the cook started. Repeat
 			// that complete exchange for extra outputs inside the same animation,
-			// one verified set at a time, stopping at the first shortage or full
-			// slot. Brewing never grants an item, so it can never reach this path.
-			if (cook_cycle_ingredient_count == 0) {
-				Trace("COOK_NO_CYCLE", inventory_id, item);
-				return;
-			}
-			if (MISC::GET_GAME_TIMER() - cook_cycle_last_ms > kCookCycleWindowMs) {
-				Trace("COOK_STALE", inventory_id, item);
-				cook_cycle_ingredient_count = 0;
-				return;
-			}
+			// one verified set at a time, stopping at the first shortage. Brewing
+			// never grants an item, so it can never reach this path.
 
 			const int granted_per_cook = after_count - before_count;
 			Trace("COOK_GRANT", inventory_id, item, granted_per_cook);
