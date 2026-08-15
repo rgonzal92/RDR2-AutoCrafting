@@ -628,9 +628,9 @@ namespace
 
 	/**
 	 * Performs one additional cooking exchange inside the current grant call:
-	 * verifies output capacity and ingredient availability, removes one full
-	 * recorded ingredient set, and re-runs the game's own grant with its
-	 * original arguments.
+	 * verifies ingredient availability, re-runs the game's own grant with its
+	 * original arguments, and — only after the game actually added the
+	 * output — removes one full recorded ingredient set.
 	 *
 	 * All checks and the exchange run inside one native call on the script
 	 * thread, so a verified count cannot change before it is used.
@@ -649,11 +649,12 @@ namespace
 		if (grant == nullptr) {
 			return kCookExchangeNoHandler;
 		}
-		// Mirror the game's own capacity predicate: a negative slot limit
-		// means the stack is unlimited, zero means no room, positive is a
-		// real limit that must leave space for one more grant.
+		// The slot-limit query is only trustworthy when it returns a positive
+		// limit: traces showed it returning zero for items the game itself
+		// kept granting. Honor real data; otherwise the game's own add call
+		// arbitrates capacity below.
 		const int slot_max = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(output_item, output_slot);
-		if (slot_max >= 0) {
+		if (slot_max > 0) {
 			const int output_count = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 				output_inventory_id, output_item, false);
 			if (output_count + output_quantity > slot_max) {
@@ -661,16 +662,32 @@ namespace
 			}
 		}
 
-		// Draining the stack to zero here is safe: the game re-evaluates its
+		// Every ingredient must be available BEFORE granting: the payment
+		// below must never be able to fail once the output has been granted.
+		// Draining the stack to zero is safe: the game re-evaluates its
 		// cook-again prompt's enabled state from live inventory after every
-		// cook, and automation only ever presses enabled prompts, so the flow
-		// ends through the game's own disabled-prompt path.
+		// cook, and automation only ever presses enabled prompts.
 		for (int i = 0; i < cook_cycle_ingredient_count; ++i) {
 			const CookIngredient& ingredient = cook_cycle_ingredients[i];
 			if (INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 					ingredient.inventory_id, ingredient.item, false) < ingredient.quantity) {
 				return kCookExchangeIngredientShort;
 			}
+		}
+
+		// Grant first, pay second. If the game's own add refuses or no-ops,
+		// nothing has been consumed and the batch simply stops — no capacity
+		// prediction needed. The previous grant's return value overwrote the
+		// first argument slot; restore it so the re-run sees its original
+		// arguments.
+		const int before_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+			output_inventory_id, output_item, false);
+		ctx->get_arg<int>(0) = output_inventory_id;
+		grant(ctx);
+		const int after_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+			output_inventory_id, output_item, false);
+		if (after_output - before_output != output_quantity) {
+			return kCookExchangeGrantMismatch;
 		}
 
 		for (int i = 0; i < cook_cycle_ingredient_count; ++i) {
@@ -682,20 +699,10 @@ namespace
 			const int after = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 				ingredient.inventory_id, ingredient.item, false);
 			if (before - after != ingredient.quantity) {
+				// Unreachable given the availability check above; traced loudly
+				// if it ever happens so the exchange can be re-examined.
 				return kCookExchangeRemoveMismatch;
 			}
-		}
-
-		const int before_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
-			output_inventory_id, output_item, false);
-		// The previous grant's return value overwrote the first argument slot;
-		// restore it so the re-run sees its original arguments.
-		ctx->get_arg<int>(0) = output_inventory_id;
-		grant(ctx);
-		const int after_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
-			output_inventory_id, output_item, false);
-		if (after_output - before_output != output_quantity) {
-			return kCookExchangeGrantMismatch;
 		}
 		return kCookExchangeOk;
 	}

@@ -123,12 +123,13 @@ not apply there, so AutoCraft does two things instead:
 - **Batched output per animation**: when the game grants the cooked item, it
   has already validated and paid for exactly one cook. AutoCraft repeats that
   complete exchange up to 10 times inside the same animation: for each extra
-  output it first confirms the satchel slot has room and every recorded
-  ingredient of the set is still available, then removes one full ingredient
-  set and re-runs the game's own grant, verifying each count change. The
-  batch stops at the first shortage or full slot. This is the original mod's
-  "3 per animation" idea with per-item verification, so ingredients can never
-  be consumed without a matching output.
+  output it first confirms every recorded ingredient of the set is still
+  available, then re-runs the game's own grant, and only after the game
+  actually added the output does it remove one full ingredient set —
+  verifying each count change. If the game's add refuses (its own capacity
+  arbitration), nothing was consumed and the batch stops. This is the
+  original mod's "3 per animation" idea with per-item verification, so
+  ingredients can never be consumed without a matching output.
 - **Automation only presses enabled prompts**: the cooking script's ONLY
   out-of-ingredients guard is leaving the cook-again prompt disabled — its
   press-reading function does not check the disabled state, its ingredient
