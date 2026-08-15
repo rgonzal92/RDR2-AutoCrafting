@@ -54,11 +54,11 @@ namespace
 	constexpr std::string_view kItemCraftAnimDict = "MECH_INVENTORY@CRAFTING@FALLBACKS@IN_HAND@MALE_A";
 	constexpr std::string_view kItemCraftAnimClip = "craft_trans_stow";
 	constexpr float kItemCraftShortDuration = 0.05f;
-	// Auto-fill/hold times applied to the cooking-flow prompts. The original
-	// upstream mod shipped 3800/1000; these are faster but still let the cook
-	// animation reach the event that grants the cooked item.
-	constexpr int kCookAutoFillMs = 1200;
-	constexpr int kCookHoldMs = 400;
+	// Auto-fill/hold times applied to the cooking-flow prompts. These are the
+	// original upstream mod's shipped values, proven not to outrun the cook
+	// animation that grants the cooked item.
+	constexpr int kCookAutoFillMs = 3800;
+	constexpr int kCookHoldMs = 1000;
 
 	// The crafting script relabels one shared prompt per recipe type. Only a
 	// prompt currently labeled CAMP_REC_MAKE may arm or drive an item batch;
@@ -568,10 +568,16 @@ namespace
 			return false;
 		}
 
+		// The exchange must always leave one full ingredient set untouched. The
+		// cooking script tracks its own ingredient expectations, and if the
+		// exchange drained the last set, the auto cook-again would start a cook
+		// the game cannot pay for and wedge the player at the fire. Leaving a
+		// set means the stack always ends through the game's own normal
+		// out-of-ingredients flow.
 		for (int i = 0; i < cook_cycle_ingredient_count; ++i) {
 			const CookIngredient& ingredient = cook_cycle_ingredients[i];
 			if (INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
-					ingredient.inventory_id, ingredient.item, false) < ingredient.quantity) {
+					ingredient.inventory_id, ingredient.item, false) < ingredient.quantity * 2) {
 				return false;
 			}
 		}

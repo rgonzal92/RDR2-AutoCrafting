@@ -129,6 +129,12 @@ not apply there, so AutoCraft does two things instead:
   batch stops at the first shortage or full slot. This is the original mod's
   "3 per animation" idea with per-item verification, so ingredients can never
   be consumed without a matching output.
+- **One set always stays in reserve**: the exchange never consumes the last
+  full ingredient set. The cooking script keeps its own expectations about
+  remaining ingredients, and draining them behind its back makes the auto
+  cook-again start an unpayable cook that wedges the player at the fire.
+  Leaving a set guarantees the stack ends through the game's own normal
+  out-of-ingredients flow, which exits cleanly.
 
 The mod never forces the "meat is done" animation event: the camp script polls
 it continuously, so forcing it would grant items every frame and again when
