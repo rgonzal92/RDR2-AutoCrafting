@@ -1,12 +1,17 @@
 # RDR2 AutoCrafting Mod
 
-One ammunition craft can run up to 50 of RDR2's normal crafting transactions
-without waiting for each repeated animation. Every transaction is validated by
-the game, consumes its required ingredients, and stops when ingredients run out
-or ammunition reaches capacity. Non-ammunition recipes still craft once.
+One craft action can run up to 50 of RDR2's normal crafting transactions
+without waiting for each repeated animation. This covers ammunition and every
+other recipe selected from the crafting menu (tonics, remedies, and so on).
+Every transaction is validated by the game, consumes its required ingredients,
+and stops when ingredients run out or the output reaches capacity.
+
+Cooking and brewing at a campfire are automated instead of batched: after one
+manual cook, the cook, stow, and cook-again prompts complete on their own until
+the stack is done or the satchel is full.
 
 AutoCraft is always enabled and has no custom menu or keyboard shortcut. One
-inventory notification is shown for each ammunition batch.
+inventory notification is shown for each batch.
 
 ## Documentation
 

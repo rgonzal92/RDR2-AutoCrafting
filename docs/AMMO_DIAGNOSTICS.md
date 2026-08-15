@@ -13,6 +13,11 @@ Animation investigation records include `ANIM_EVENT`, `ANIM_SCENE_EXIT`, and
 `ANIM_SCENE_RATE`. For rate records, `quantity` stores the requested rate times
 1,000 (for example, `5000` means 5×). These hooks remain logging-only.
 
+`PROMPT_SET_ENABLED` records the enable/disable state the game assigns to the
+tracked crafting prompt (`result` is 1 for enabled). The normal build gates its
+forced item crafts on this signal, so trace it first if item batching ever
+misbehaves after a game update.
+
 `CRAFT_GLOBALS` is a read-only build-1491 check for the proposed menu-refresh
 flag. `before_count` contains the recipe count, `subject_hash` contains the
 external preselected-recipe request, and `result` contains the refresh flag.

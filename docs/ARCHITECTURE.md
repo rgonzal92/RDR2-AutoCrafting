@@ -6,22 +6,22 @@ source code.
 
 ## What the mod does
 
-AutoCraft applies to **ammunition recipes only**. One craft action can perform
-up to 50 normal RDR2 ammunition crafts without waiting for each repeated
-animation.
+AutoCraft applies to **every recipe selected from the crafting menu**. One
+craft action can perform up to 50 normal RDR2 crafts without waiting for each
+repeated animation. Cooking and brewing at a campfire are automated rather
+than batched (see "Cooking automation" below).
 
 It does **not** multiply an item amount. Instead, RDR2 still performs each
 individual transaction:
 
-1. RDR2 checks the recipe's ingredients and available ammo capacity.
+1. RDR2 checks the recipe's ingredients and available output capacity.
 2. RDR2 removes the required ingredients.
-3. RDR2 adds one normal ammo output.
+3. RDR2 adds one normal output (ammunition or an inventory item).
 4. AutoCraft counts that successful addition and, if the batch has not ended,
    lets RDR2 begin the next validated transaction immediately.
 
-If there are ingredients for 7 crafts, the batch makes 7. If the ammo pouch is
-nearly full, the batch stops when no more ammo fits. Non-ammunition recipes use
-their normal one-craft behavior.
+If there are ingredients for 7 crafts, the batch makes 7. If the ammo pouch or
+satchel slot is nearly full, the batch stops when no more output fits.
 
 ## Terms used in the source
 
@@ -83,6 +83,45 @@ RDR2 still performs individual inventory updates, which would normally request
 one toast notification per craft. AutoCraft lets the first toast through and
 hides later toasts in the same batch. Hiding a toast does not affect inventory
 or ingredient changes.
+
+## Item-batch flow (tonics, remedies, and other menu recipes)
+
+Non-ammunition recipes never use the animation events above. The crafting
+script instead waits out the full duration of one crafting animation, commits
+exactly one validated transaction, and returns to a "craft again" prompt.
+AutoCraft batches these differently:
+
+- **Skipping the wait**: the script asks RDR2 how long the crafting animation
+  is and uses that as its commit timer. AutoCraft answers that question with a
+  tiny duration (only for that exact crafting animation), so each craft
+  commits almost immediately.
+- **Craft again, automatically**: after each item craft, AutoCraft presses the
+  "craft again" prompt for the player.
+- **The game keeps its veto**: after every item craft, RDR2 itself re-checks
+  ingredients and output capacity and enables the craft-again prompt only if
+  another craft is legal. AutoCraft watches that enable/disable signal and
+  only presses while the game says crafting is allowed. This matters because
+  the item path removes ingredients before granting output; pressing blindly
+  at capacity would consume ingredients for nothing.
+- **Success signal**: a craft counts only when RDR2 actually adds the item to
+  the inventory, exactly like the ammunition path counts a real ammo addition.
+
+The batch also ends if the craft-again opportunity does not reappear shortly
+after the last granted output (for example, the player backs out mid-batch),
+or if a forced craft makes no progress within the fail-safe window.
+
+## Cooking automation
+
+Cooking meat and brewing use a separate game flow: ingredients are taken when
+cooking starts, doneness is a hold-the-button meter, and the cooked item is
+granted by the cooking animation. Batching does not apply there. Instead,
+AutoCraft converts the cook, stow, and cook-again prompts into fast
+self-completing holds — the mechanism the original upstream mod shipped —
+so one manual cook continues through the whole stack hands-free.
+
+If the satchel fills up, the game hides the stow prompt and only offers to eat
+the food. AutoCraft never auto-eats, so automation simply stops there and
+waits for the player.
 
 ## Crafting-menu refresh
 
