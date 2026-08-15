@@ -784,7 +784,7 @@ namespace
 				const char* anim_clip = ctx->get_arg<const char*>(1);
 				if (anim_dict != nullptr && anim_clip != nullptr
 					&& kItemCraftAnimDict == anim_dict && kItemCraftAnimClip == anim_clip) {
-					ctx->set_return_value<float>(kItemCraftShortDuration);
+					ctx->set_return_value(kItemCraftShortDuration);
 				}
 			}
 		});
