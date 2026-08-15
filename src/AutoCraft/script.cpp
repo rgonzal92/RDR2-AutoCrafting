@@ -108,12 +108,14 @@ namespace
 	// without ingredients both grants a free item and can wedge the player in
 	// a promptless state), so automation must never act on a disabled prompt.
 	// Automation presses a cooking prompt only after it has been continuously
-	// enabled for this long. Pacing uses the game clock directly because
+	// enabled for this long AND the player ped is not mid scenario transition.
+	// Pacing uses the game clock directly because
 	// _UI_PROMPT_HAS_HOLD_MODE_COMPLETED proved unreliable in traces: it
 	// reported completion within two frames of a prompt's creation, which
 	// advanced the cooking flow faster than its animations and wedged the
-	// scenario transition.
-	constexpr int kCookPressDelayMs = 3800;
+	// scenario transition. The transition gate targets that exact failure
+	// mechanism, which is what allows the dwell to be this short.
+	constexpr int kCookPressDelayMs = 1000;
 	constexpr int kMaxCookPrompts = 4;
 	struct CookPrompt
 	{
@@ -545,8 +547,9 @@ namespace
 
 	/**
 	 * Returns whether automation may press this cooking prompt right now: the
-	 * game must have it enabled, and it must have stayed enabled for the full
-	 * dwell time so the flow advances no faster than a patient player.
+	 * game must have it enabled, it must have stayed enabled for the dwell
+	 * time, and the player must not be mid scenario transition — pressing
+	 * during a transition is what wedged the cooking state machine.
 	 * Pressing resets the dwell so a prompt is never pressed twice in a burst.
 	 */
 	bool TryConsumeCookPress(Prompt prompt)
@@ -557,6 +560,11 @@ namespace
 		}
 		const int now_ms = MISC::GET_GAME_TIMER();
 		if (now_ms - tracked->enabled_since_ms < kCookPressDelayMs) {
+			return false;
+		}
+		if (PED::_IS_PED_DOING_SCENARIO_TRANSITION(PLAYER::PLAYER_PED_ID())) {
+			// Not a consumed press: the dwell stays satisfied and the press
+			// fires on the first frame the transition completes.
 			return false;
 		}
 		tracked->enabled_since_ms = now_ms;
