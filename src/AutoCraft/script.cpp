@@ -1039,30 +1039,30 @@ namespace
 			const int granted_per_cook = after_count - before_count;
 			Trace("COOK_GRANT", inventory_id, item, granted_per_cook);
 
-			// Derive a trustworthy stack limit for the cooked item. The grant's
-			// own slot argument returns garbage for some items, and consumables
-			// actually stack in the satchel slot, so query both and keep only
-			// answers that pass the sanity test: a real limit can never be
+			// Derive a trustworthy stack limit for the cooked item, preferring
+			// the game's own upgrade-aware lookup: the crafting scripts resolve
+			// stack limits through _GET_ITEM_ROLE_MAX_LEVEL_COUNT for items
+			// with upgradeable stacks (satchel upgrades), and only fall back to
+			// _GET_ITEM_SLOT_MAX_COUNT, which reports the base size (the
+			// mysterious "5" for meat capped at 99 on an upgraded satchel).
+			// Each answer must pass the sanity test: a real limit can never be
 			// smaller than the count already held. In the trace: owner = the
-			// queried limit, subject = the slot hash, quantity = current count.
-			const Hash satchel_slot = MISC::GET_HASH_KEY("SLOTID_SATCHEL");
+			// queried limit, subject = the slot/item hash, quantity = count.
+			const int role_limit =
+				INVENTORY::_GET_ITEM_ROLE_MAX_LEVEL_COUNT(inventory_id, item);
 			const int grant_slot_limit = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(item, slot);
-			const int satchel_limit = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(item, satchel_slot);
+			Trace("COOK_ROLE_LIMIT", role_limit, item, after_count);
 			Trace("COOK_SLOT_INFO", grant_slot_limit, slot, after_count);
-			Trace("COOK_SLOT_INFO2", satchel_limit, satchel_slot, after_count);
 			int output_limit = -1;
-			if (grant_slot_limit > 0 && grant_slot_limit >= after_count) {
+			if (role_limit > 0 && role_limit >= after_count) {
+				output_limit = role_limit;
+			}
+			else if (grant_slot_limit > 0 && grant_slot_limit >= after_count) {
 				output_limit = grant_slot_limit;
 			}
-			if (satchel_limit > 0 && satchel_limit >= after_count
-				&& (output_limit < 0 || satchel_limit < output_limit)) {
-				output_limit = satchel_limit;
-			}
-			if (output_limit < 0) {
-				// Some cooked items report nonsense limits from every slot query
-				// (traces showed 5 for an item empirically capped at 99). Assume
-				// a limit safely below the standard 99 provision cap rather than
-				// disabling batching for exactly the items cooked most.
+			else {
+				// No sane answer from any query: assume a limit safely below
+				// the standard 99 provision cap rather than disabling batching.
 				output_limit = kCookAssumedStackLimit;
 			}
 
