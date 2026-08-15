@@ -48,7 +48,29 @@ namespace
 	rage::scrThread** current_script_thread = nullptr;
 
 #if !AUTOCRAFT_DIAGNOSTIC
-	Prompt recipe_menu_prompt = 0;
+	// Non-ammo menu recipes commit on a script timer seeded from this exact
+	// animation's duration; returning a tiny duration collapses that wait.
+	// The strings match the script's own literals byte-for-byte.
+	constexpr std::string_view kItemCraftAnimDict = "MECH_INVENTORY@CRAFTING@FALLBACKS@IN_HAND@MALE_A";
+	constexpr std::string_view kItemCraftAnimClip = "craft_trans_stow";
+	constexpr float kItemCraftShortDuration = 0.05f;
+	// Auto-fill/hold times applied to the cooking-flow prompts. The original
+	// upstream mod shipped 3800/1000; these are faster but still let the cook
+	// animation reach the event that grants the cooked item.
+	constexpr int kCookAutoFillMs = 1200;
+	constexpr int kCookHoldMs = 400;
+
+	// The crafting script relabels one shared prompt per recipe type. Only a
+	// prompt currently labeled CAMP_REC_MAKE may arm or drive an item batch;
+	// cook/brew labels route to the cooking flow instead.
+	bool tracked_prompt_is_make = false;
+	// Last enabled state the game assigned to the tracked MAKE prompt. The
+	// crafting script disables the prompt while a craft is in flight and
+	// re-enables it only after re-validating ingredients and output capacity,
+	// so this mirrors the game's own "may craft again" verdict. Forced presses
+	// are gated on it because the item commit path removes ingredients before
+	// granting output.
+	bool make_prompt_enabled = false;
 	int skipped_frame = -1;
 	// These counters track real, successful game transactions—not requested
 	// quantities. A failed transaction never decrements the remaining count.
@@ -57,11 +79,25 @@ namespace
 	bool pending_menu_refresh = false;
 	bool force_safe_breakout = false;
 	int forced_commit_frame = -1;
-	bool awaiting_batch_ammo_add = false;
+	bool awaiting_batch_output = false;
 	// RDR2 reports safetobreakout after every successful craft animation. This
 	// distinguishes that normal per-craft signal from a failed craft attempt.
 	bool craft_succeeded_since_safe_breakout = false;
 	bool batch_popup_shown = false;
+	// True while the active batch repeats item (non-ammo) crafts via forced
+	// "craft again" presses instead of forced animation events.
+	bool item_batch = false;
+	// An item batch may only continue seamlessly: if the next "craft again"
+	// opportunity does not appear shortly after the last granted output (for
+	// example the player backed out to the recipe list), the batch ends
+	// instead of pressing a prompt in an unexpected menu state.
+	constexpr int kBatchContinuityFrameLimit = 30;
+	int last_craft_success_frame = -1;
+	// Cooking-flow prompts converted to fast auto-fill holds (the original
+	// upstream mechanism). A small ring buffer: several coexist while cooking.
+	constexpr int kMaxCookPrompts = 4;
+	Prompt cook_prompts[kMaxCookPrompts] = {};
+	int cook_prompt_cursor = 0;
 #endif
 
 	using GetNativeHandler = rage::scrNativeHandler(*)(rage::scrNativeHash hash);
@@ -81,6 +117,7 @@ namespace
 		return script_hash == kCraftingScript || script_hash == kCraftingMenuScript;
 	}
 
+#if AUTOCRAFT_DIAGNOSTIC
 	bool IsCraftingPromptText(std::string_view text)
 	{
 		return text == "CAMP_REC_COOK_AGN"
@@ -90,7 +127,6 @@ namespace
 			|| text == "CAMP_REC_MAKE";
 	}
 
-#if AUTOCRAFT_DIAGNOSTIC
 	diagnostic::Record MakeRecord(std::string_view event)
 	{
 		diagnostic::Record record;
@@ -167,6 +203,23 @@ namespace
 			if (prompt == tracked_crafting_prompt) {
 				auto record = MakeRecord("PROMPT_REGISTER_END");
 				record.prompt = prompt;
+				diagnostic::Write(record);
+			}
+		});
+
+		NHOOK("_UI_PROMPT_SET_ENABLED", 0x8A0FB4D03A630D21, {
+			if (!IsCraftingScript() || diagnostic::IsInternalQuery()) {
+				CALL();
+				return;
+			}
+
+			const Prompt prompt = ctx->get_arg<Prompt>(0);
+			const BOOL enabled = ctx->get_arg<BOOL>(1);
+			CALL();
+			if (prompt == tracked_crafting_prompt) {
+				auto record = MakeRecord("PROMPT_SET_ENABLED");
+				record.prompt = prompt;
+				record.result = enabled ? 1 : 0;
 				diagnostic::Write(record);
 			}
 		});
@@ -369,14 +422,56 @@ namespace
 		});
 	}
 #else
+	/** Returns whether a prompt label belongs to the cooking/fire-crafting flow. */
+	bool IsCookFlowPromptText(std::string_view text)
+	{
+		return text == "CRAFT_FASTER"
+			|| text == "STOW_ITEM"
+			|| text == "CAMP_REC_COOK_AGN"
+			|| text == "CAMP_REC_MAKE_AGN";
+	}
+
+	bool IsCookPrompt(Prompt prompt)
+	{
+		if (prompt == 0) {
+			return false;
+		}
+		for (const Prompt tracked : cook_prompts) {
+			if (tracked == prompt) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void TrackCookPrompt(Prompt prompt)
+	{
+		if (IsCookPrompt(prompt)) {
+			return;
+		}
+		cook_prompts[cook_prompt_cursor] = prompt;
+		cook_prompt_cursor = (cook_prompt_cursor + 1) % kMaxCookPrompts;
+	}
+
+	void ForgetCookPrompt(Prompt prompt)
+	{
+		for (Prompt& tracked : cook_prompts) {
+			if (tracked == prompt) {
+				tracked = 0;
+			}
+		}
+	}
+
 	/** Resets transient batch state after RDR2 completes or rejects a craft. */
 	void FinishBatch()
 	{
 		remaining_batch_crafts = 0;
 		force_safe_breakout = false;
 		forced_commit_frame = -1;
-		awaiting_batch_ammo_add = false;
+		awaiting_batch_output = false;
 		craft_succeeded_since_safe_breakout = false;
+		item_batch = false;
+		last_craft_success_frame = -1;
 
 		// A single craft already refreshes the recipe menu. Request a rebuild only
 		// when RDR2 committed additional transactions inside the same menu action.
@@ -384,6 +479,38 @@ namespace
 			pending_menu_refresh = true;
 		}
 		completed_batch_crafts = 0;
+	}
+
+	/** Records one successful, game-validated craft and advances the batch. */
+	void CountBatchCraft(bool is_item_craft)
+	{
+		forced_commit_frame = -1;
+		awaiting_batch_output = false;
+		item_batch = is_item_craft;
+		last_craft_success_frame = MISC::GET_FRAME_COUNT();
+		++completed_batch_crafts;
+		if (!is_item_craft) {
+			craft_succeeded_since_safe_breakout = true;
+		}
+
+		if (remaining_batch_crafts > 0) {
+			--remaining_batch_crafts;
+		}
+		else {
+			// The first craft of a menu selection arms the rest of the batch the
+			// moment its output is granted.
+			remaining_batch_crafts = kCraftBatchLimit - 1;
+			batch_popup_shown = false;
+		}
+
+		if (remaining_batch_crafts == 0) {
+			if (is_item_craft) {
+				FinishBatch();
+			}
+			else {
+				force_safe_breakout = true;
+			}
+		}
 	}
 
 	/** Requests RDR2's own recipe-menu rebuild after a multi-craft batch. */
@@ -399,7 +526,7 @@ namespace
 		}
 	}
 
-	/** Installs the release hooks that accelerate validated ammunition crafts. */
+	/** Installs the release hooks that batch validated crafting transactions. */
 	void InitializeNormalHooks()
 	{
 		// RDR2 sets this HUD context for an unrelated prompt path. Ignore prompt
@@ -412,13 +539,67 @@ namespace
 		});
 
 		NHOOK("_UI_PROMPT_SET_TEXT", 0x5DD02A8318420DD7, {
+			bool convert_cook_prompt = false;
+			Prompt prompt = 0;
 			if (IsCraftingScript() && skipped_frame != MISC::GET_FRAME_COUNT()) {
 				const char* prompt_text = ctx->get_arg<const char*>(1);
-				if (prompt_text != nullptr && IsCraftingPromptText(prompt_text)) {
-					tracked_crafting_prompt = ctx->get_arg<Prompt>(0);
-					if (std::string_view(prompt_text) == "CAMP_REC_MAKE") {
-						recipe_menu_prompt = tracked_crafting_prompt;
+				if (prompt_text != nullptr) {
+					prompt = ctx->get_arg<Prompt>(0);
+					const std::string_view text(prompt_text);
+					if (text == "CAMP_REC_MAKE") {
+						tracked_crafting_prompt = prompt;
+						tracked_prompt_is_make = true;
+						ForgetCookPrompt(prompt);
 					}
+					else if (text == "CAMP_REC_COOK" || text == "CAMP_REC_BREW") {
+						// Cook/brew recipes relabel the same menu prompt and route
+						// to the cooking flow; they must not arm an item batch and
+						// must not auto-fill from the recipe menu.
+						if (prompt == tracked_crafting_prompt) {
+							tracked_prompt_is_make = false;
+						}
+						ForgetCookPrompt(prompt);
+					}
+					else if (IsCookFlowPromptText(text)) {
+						TrackCookPrompt(prompt);
+						if (prompt == tracked_crafting_prompt) {
+							tracked_prompt_is_make = false;
+						}
+						convert_cook_prompt = true;
+					}
+				}
+			}
+			CALL();
+			if (convert_cook_prompt) {
+				// Covers relabels of prompts that were registered earlier. A fresh
+				// registration applies its own mode after this text call, and the
+				// _UI_PROMPT_REGISTER_END hook converts it again.
+				HUD::_UI_PROMPT_SET_HOLD_AUTO_FILL_MODE(prompt, kCookAutoFillMs, kCookHoldMs);
+			}
+		});
+
+		// Cooking-flow prompts become fast self-filling holds, so one manual
+		// cook continues through cook/stow/cook-again without further input.
+		// This is the original upstream mod's mechanism with shorter times.
+		NHOOK("_UI_PROMPT_REGISTER_END", 0xF7AA2696A22AD8B9, {
+			CALL();
+			if (IsCraftingScript()) {
+				const Prompt prompt = ctx->get_arg<Prompt>(0);
+				if (IsCookPrompt(prompt)) {
+					HUD::_UI_PROMPT_SET_HOLD_AUTO_FILL_MODE(prompt, kCookAutoFillMs, kCookHoldMs);
+				}
+			}
+		});
+
+		NHOOK("_UI_PROMPT_SET_ENABLED", 0x8A0FB4D03A630D21, {
+			if (IsCraftingScript() && ctx->get_arg<Prompt>(0) == tracked_crafting_prompt) {
+				make_prompt_enabled = ctx->get_arg<BOOL>(1) != 0;
+				// After each item craft the game re-enables the MAKE prompt only
+				// when another craft passed its ingredient and capacity checks. A
+				// final "disabled" verdict with no craft in flight ends the batch.
+				if (item_batch && !awaiting_batch_output && !make_prompt_enabled
+					&& remaining_batch_crafts > 0) {
+					FinishBatch();
 				}
 			}
 			CALL();
@@ -432,24 +613,54 @@ namespace
 			}
 
 			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
-			if (prompt == recipe_menu_prompt && !pressed) {
-				// State 10 has returned to the recipe menu, which is the only safe
+
+			// Cooking flow: report a completed self-filling hold as a press so
+			// the script advances through cook, stow, and cook-again on its own.
+			if (!pressed && IsCookPrompt(prompt)
+				&& HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt)) {
+				ctx->set_return_value<BOOL>(true);
+				return;
+			}
+
+			if (prompt != tracked_crafting_prompt || !tracked_prompt_is_make) {
+				return;
+			}
+
+			if (!pressed) {
+				// The script is idle on its MAKE prompt, which is the only safe
 				// point to request RDR2's build-specific UI refresh flag.
 				RefreshCraftingMenu();
+
+				// Item batches repeat by pressing "craft again" for the player,
+				// but only while the game itself re-enabled the prompt—its own
+				// signal that ingredients and capacity allow another craft. The
+				// continuity window keeps a leftover batch from pressing prompts
+				// in a menu state it did not start in.
+				if (item_batch && remaining_batch_crafts > 0 && !awaiting_batch_output) {
+					if (MISC::GET_FRAME_COUNT() - last_craft_success_frame
+						> kBatchContinuityFrameLimit) {
+						FinishBatch();
+					}
+					else if (make_prompt_enabled) {
+						ctx->set_return_value<BOOL>(true);
+						awaiting_batch_output = true;
+						forced_commit_frame = MISC::GET_FRAME_COUNT();
+					}
+				}
+				return;
 			}
-			if (tracked_crafting_prompt != 0
-				&& prompt == tracked_crafting_prompt
-				&& pressed) {
-				// "Craft Again" arms a full batch. The first craft selected from the
-				// recipe list arms itself when its first ammo add succeeds below.
-				remaining_batch_crafts = kCraftBatchLimit;
-				completed_batch_crafts = 0;
-				force_safe_breakout = false;
-				forced_commit_frame = -1;
-				awaiting_batch_ammo_add = false;
-				craft_succeeded_since_safe_breakout = false;
-				batch_popup_shown = false;
-			}
+
+			// A real press arms a full batch. The first craft selected from the
+			// recipe list arms itself when its first output add succeeds below.
+			remaining_batch_crafts = kCraftBatchLimit;
+			completed_batch_crafts = 0;
+			force_safe_breakout = false;
+			forced_commit_frame = -1;
+			awaiting_batch_output = false;
+			craft_succeeded_since_safe_breakout = false;
+			batch_popup_shown = false;
+			item_batch = false;
+			last_craft_success_frame = MISC::GET_FRAME_COUNT();
 		});
 
 		NHOOK("HAS_ANIM_EVENT_FIRED", 0x5851CC48405F4A07, {
@@ -458,12 +669,26 @@ namespace
 			if (!IsCraftingScript()) {
 				return;
 			}
+
+			// The camp scripts poll animation events every frame, which makes
+			// this a reliable place for the item-batch no-progress fail-safe.
+			if (item_batch && awaiting_batch_output
+				&& MISC::GET_FRAME_COUNT() - forced_commit_frame >= kBatchNoProgressFrameLimit) {
+				FinishBatch();
+			}
+
+			if (item_batch) {
+				// Item crafts never consult the commit or safetobreakout events;
+				// leave them untouched while an item batch runs.
+				return;
+			}
+
 			if (event_hash == kCraftCommitEvent && remaining_batch_crafts > 0) {
 				// Let the game reach its existing validation and inventory path without
 				// waiting for another visible craft-animation event.
-				if (!awaiting_batch_ammo_add) {
+				if (!awaiting_batch_output) {
 					forced_commit_frame = MISC::GET_FRAME_COUNT();
-					awaiting_batch_ammo_add = true;
+					awaiting_batch_output = true;
 				}
 				ctx->set_return_value<BOOL>(true);
 			}
@@ -485,7 +710,7 @@ namespace
 					FinishBatch();
 				}
 				else if (remaining_batch_crafts > 0
-					&& awaiting_batch_ammo_add
+					&& awaiting_batch_output
 					&& MISC::GET_FRAME_COUNT() - forced_commit_frame >= kBatchNoProgressFrameLimit) {
 					// Do not keep forcing an unacknowledged transaction forever if a
 					// script variant neither adds ammo nor emits its normal exit event.
@@ -496,17 +721,32 @@ namespace
 		});
 
 		NHOOK("_INVENTORY_ADD_ITEM_WITH_GUID", 0xCB5D11F9508A928D, {
-			CALL();
-			if (IsCraftingScript() && remaining_batch_crafts > 0) {
-				// Non-ammo recipes use a different output path. Stop only AutoCraft's
-				// acceleration and leave the game's normal item craft untouched.
-				remaining_batch_crafts = 0;
-				completed_batch_crafts = 0;
-				forced_commit_frame = -1;
-				awaiting_batch_ammo_add = false;
-				craft_succeeded_since_safe_breakout = false;
-				force_safe_breakout = true;
+			if (!IsCraftingScript()) {
+				CALL();
+				return;
 			}
+
+			const int inventory_id = ctx->get_arg<int>(0);
+			const Hash item = ctx->get_arg<Hash>(3);
+			const int before_count =
+				INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(inventory_id, item, false);
+			CALL();
+			const BOOL result = *ctx->get_return_value<BOOL>();
+			const int after_count =
+				INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(inventory_id, item, false);
+			if (!result || after_count <= before_count) {
+				return;
+			}
+
+			// A confirmed grant is the success signal for menu-recipe item crafts,
+			// mirroring the ammo path below. Cooking grants also pass through this
+			// native, but only a prompt still labeled CAMP_REC_MAKE may arm or
+			// continue an item batch, so cooking keeps its normal notifications.
+			if (!tracked_prompt_is_make) {
+				return;
+			}
+
+			CountBatchCraft(true);
 		});
 		NHOOK("_ADD_AMMO_TO_PED_BY_TYPE", 0x106A811C6D3035F3, {
 			if (!IsCraftingScript()) {
@@ -526,25 +766,36 @@ namespace
 			// A positive count change is the definitive success signal. This is why
 			// each batch remains limited by the player's real ingredients and capacity.
 			const bool starts_new_batch = remaining_batch_crafts == 0;
-			if (!starts_new_batch && !awaiting_batch_ammo_add) {
+			if (!starts_new_batch && !awaiting_batch_output) {
 				return;
 			}
 
-			forced_commit_frame = -1;
-			awaiting_batch_ammo_add = false;
-			++completed_batch_crafts;
-			craft_succeeded_since_safe_breakout = true;
+			CountBatchCraft(false);
+		});
 
-			if (remaining_batch_crafts > 0) {
-				--remaining_batch_crafts;
+		// Non-ammo recipes wait out this exact animation's duration before each
+		// commit; a tiny duration makes the crafting script commit immediately.
+		// Ammo recipes never read it, and no other call site exists in the two
+		// crafting scripts.
+		NHOOK("GET_ANIM_DURATION", 0x9FFAF4940A54CC09, {
+			CALL();
+			if (IsCraftingScript()) {
+				const char* anim_dict = ctx->get_arg<const char*>(0);
+				const char* anim_clip = ctx->get_arg<const char*>(1);
+				if (anim_dict != nullptr && anim_clip != nullptr
+					&& kItemCraftAnimDict == anim_dict && kItemCraftAnimClip == anim_clip) {
+					ctx->set_return_value<float>(kItemCraftShortDuration);
+				}
 			}
-			else {
-				remaining_batch_crafts = kCraftBatchLimit - 1;
-				batch_popup_shown = false;
-			}
+		});
 
-			if (remaining_batch_crafts == 0) {
-				force_safe_breakout = true;
+		NHOOK("_UI_PROMPT_IS_PRESSED", 0x21E60E230086697F, {
+			const Prompt prompt = ctx->get_arg<Prompt>(0);
+			CALL();
+			if (IsCraftingScript() && IsCookPrompt(prompt)
+				&& *ctx->get_return_value<BOOL>() == 0
+				&& HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt)) {
+				ctx->set_return_value<BOOL>(true);
 			}
 		});
 
