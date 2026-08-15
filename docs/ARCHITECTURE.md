@@ -114,14 +114,30 @@ or if a forced craft makes no progress within the fail-safe window.
 
 Cooking meat and brewing use a separate game flow: ingredients are taken when
 cooking starts, doneness is a hold-the-button meter, and the cooked item is
-granted by the cooking animation. Batching does not apply there. Instead,
-AutoCraft converts the cook, stow, and cook-again prompts into fast
-self-completing holds — the mechanism the original upstream mod shipped —
-so one manual cook continues through the whole stack hands-free.
+granted partway through the cooking animation. The menu-batch mechanism does
+not apply there, so AutoCraft does two things instead:
+
+- **Automation**: the cook, stow, and cook-again prompts become fast
+  self-completing holds — the mechanism the original upstream mod shipped —
+  so one manual cook continues through the whole stack hands-free.
+- **Batched output per animation**: when the game grants the cooked item, it
+  has already validated and paid for exactly one cook. AutoCraft repeats that
+  complete exchange up to 10 times inside the same animation: for each extra
+  output it first confirms the satchel slot has room and every recorded
+  ingredient of the set is still available, then removes one full ingredient
+  set and re-runs the game's own grant, verifying each count change. The
+  batch stops at the first shortage or full slot. This is the original mod's
+  "3 per animation" idea with per-item verification, so ingredients can never
+  be consumed without a matching output.
+
+The mod never forces the "meat is done" animation event: the camp script polls
+it continuously, so forcing it would grant items every frame and again when
+the real event fires. The quantity exchange above is the safe equivalent.
 
 If the satchel fills up, the game hides the stow prompt and only offers to eat
 the food. AutoCraft never auto-eats, so automation simply stops there and
-waits for the player.
+waits for the player. Brewing is unaffected by the exchange logic because it
+never grants an inventory item.
 
 ## Crafting-menu refresh
 

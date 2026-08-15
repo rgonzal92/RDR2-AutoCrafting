@@ -98,6 +98,30 @@ namespace
 	constexpr int kMaxCookPrompts = 4;
 	Prompt cook_prompts[kMaxCookPrompts] = {};
 	int cook_prompt_cursor = 0;
+
+	// One cooking cycle removes its ingredient set when the cook starts and
+	// grants the cooked item later from an animation event. The removals are
+	// recorded so the grant hook can repeat the complete, verified exchange
+	// for extra outputs inside the same animation.
+	constexpr int kCookBatchSize = 10;
+	constexpr int kMaxCookIngredients = 4;
+	// A grant older than this cannot belong to the recorded removals anymore.
+	constexpr int kCookCycleFrameWindow = 2400;
+	// Removals separated by more than this belong to a new cooking cycle.
+	constexpr int kCookIngredientGapFrames = 300;
+	struct CookIngredient
+	{
+		Hash item;
+		int inventory_id;
+		int quantity;
+		Hash reason;
+	};
+	CookIngredient cook_cycle_ingredients[kMaxCookIngredients] = {};
+	int cook_cycle_ingredient_count = 0;
+	int cook_cycle_last_frame = -1;
+	// Set while AutoCraft performs its own verified inventory operations so
+	// the hooks below do not record them as game activity.
+	bool internal_inventory_op = false;
 #endif
 
 	using GetNativeHandler = rage::scrNativeHandler(*)(rage::scrNativeHash hash);
@@ -513,6 +537,66 @@ namespace
 		}
 	}
 
+	/**
+	 * Performs one additional cooking exchange inside the current grant call:
+	 * verifies output capacity and ingredient availability, removes one full
+	 * recorded ingredient set, and re-runs the game's own grant with its
+	 * original arguments.
+	 *
+	 * All checks and the exchange run inside one native call on the script
+	 * thread, so a verified count cannot change before it is used.
+	 *
+	 * @return false when no further exchange is possible; the batch stops.
+	 */
+	bool TryCookExtraExchange(
+		rage::scrNativeCallContext* ctx,
+		rage::scrNativeHandler grant,
+		int output_inventory_id,
+		Hash output_item,
+		Hash output_slot,
+		int output_quantity)
+	{
+		// The output slot's limit must be known and leave room for one more
+		// grant; otherwise ingredients would be consumed for nothing.
+		const int slot_max = INVENTORY::_GET_ITEM_SLOT_MAX_COUNT(output_item, output_slot);
+		if (slot_max <= 0 || grant == nullptr) {
+			return false;
+		}
+		const int output_count = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+			output_inventory_id, output_item, false);
+		if (output_count + output_quantity > slot_max) {
+			return false;
+		}
+
+		for (int i = 0; i < cook_cycle_ingredient_count; ++i) {
+			const CookIngredient& ingredient = cook_cycle_ingredients[i];
+			if (INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+					ingredient.inventory_id, ingredient.item, false) < ingredient.quantity) {
+				return false;
+			}
+		}
+
+		for (int i = 0; i < cook_cycle_ingredient_count; ++i) {
+			const CookIngredient& ingredient = cook_cycle_ingredients[i];
+			const int before = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+				ingredient.inventory_id, ingredient.item, false);
+			INVENTORY::_INVENTORY_REMOVE_INVENTORY_ITEM_WITH_ITEMID(
+				ingredient.inventory_id, ingredient.item, ingredient.quantity, ingredient.reason);
+			const int after = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+				ingredient.inventory_id, ingredient.item, false);
+			if (before - after != ingredient.quantity) {
+				return false;
+			}
+		}
+
+		const int before_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+			output_inventory_id, output_item, false);
+		grant(ctx);
+		const int after_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
+			output_inventory_id, output_item, false);
+		return after_output - before_output == output_quantity;
+	}
+
 	/** Requests RDR2's own recipe-menu rebuild after a multi-craft batch. */
 	void RefreshCraftingMenu()
 	{
@@ -720,8 +804,32 @@ namespace
 			}
 		});
 
+		// Cooking removes its ingredients when the cook starts, long before the
+		// cooked item is granted. Record those removals so the grant below can
+		// repeat the complete exchange. Menu recipes (CAMP_REC_MAKE) manage
+		// their own ingredient flow and are never recorded.
+		NHOOK("_INVENTORY_REMOVE_INVENTORY_ITEM_WITH_ITEMID", 0xB4158C8C9A3B5DCE, {
+			if (IsCraftingScript() && !internal_inventory_op && !tracked_prompt_is_make) {
+				const int frame = MISC::GET_FRAME_COUNT();
+				if (cook_cycle_ingredient_count > 0
+					&& frame - cook_cycle_last_frame > kCookIngredientGapFrames) {
+					cook_cycle_ingredient_count = 0;
+				}
+				if (cook_cycle_ingredient_count < kMaxCookIngredients) {
+					CookIngredient& ingredient = cook_cycle_ingredients[cook_cycle_ingredient_count];
+					ingredient.inventory_id = ctx->get_arg<int>(0);
+					ingredient.item = ctx->get_arg<Hash>(1);
+					ingredient.quantity = ctx->get_arg<int>(2);
+					ingredient.reason = ctx->get_arg<Hash>(3);
+					++cook_cycle_ingredient_count;
+					cook_cycle_last_frame = frame;
+				}
+			}
+			CALL();
+		});
+
 		NHOOK("_INVENTORY_ADD_ITEM_WITH_GUID", 0xCB5D11F9508A928D, {
-			if (!IsCraftingScript()) {
+			if (!IsCraftingScript() || internal_inventory_op) {
 				CALL();
 				return;
 			}
@@ -739,14 +847,37 @@ namespace
 			}
 
 			// A confirmed grant is the success signal for menu-recipe item crafts,
-			// mirroring the ammo path below. Cooking grants also pass through this
-			// native, but only a prompt still labeled CAMP_REC_MAKE may arm or
-			// continue an item batch, so cooking keeps its normal notifications.
-			if (!tracked_prompt_is_make) {
+			// mirroring the ammo path below.
+			if (tracked_prompt_is_make) {
+				CountBatchCraft(true);
 				return;
 			}
 
-			CountBatchCraft(true);
+			// Cooking grants land here: the game validated and granted one cooked
+			// item for the ingredient set it removed when the cook started. Repeat
+			// that complete exchange for extra outputs inside the same animation,
+			// one verified set at a time, stopping at the first shortage or full
+			// slot. Brewing never grants an item, so it can never reach this path.
+			const int frame = MISC::GET_FRAME_COUNT();
+			if (cook_cycle_ingredient_count == 0
+				|| frame - cook_cycle_last_frame > kCookCycleFrameWindow) {
+				cook_cycle_ingredient_count = 0;
+				return;
+			}
+
+			const Hash slot = ctx->get_arg<Hash>(4);
+			const int granted_per_cook = after_count - before_count;
+			internal_inventory_op = true;
+			for (int extra = 1; extra < kCookBatchSize; ++extra) {
+				if (!TryCookExtraExchange(ctx, original, inventory_id, item, slot, granted_per_cook)) {
+					break;
+				}
+			}
+			internal_inventory_op = false;
+			cook_cycle_ingredient_count = 0;
+			// The extra grants overwrote the return slot; the script must see its
+			// own call's result.
+			ctx->set_return_value(result);
 		});
 		NHOOK("_ADD_AMMO_TO_PED_BY_TYPE", 0x106A811C6D3035F3, {
 			if (!IsCraftingScript()) {

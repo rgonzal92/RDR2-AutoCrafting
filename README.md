@@ -6,9 +6,10 @@ other recipe selected from the crafting menu (tonics, remedies, and so on).
 Every transaction is validated by the game, consumes its required ingredients,
 and stops when ingredients run out or the output reaches capacity.
 
-Cooking and brewing at a campfire are automated instead of batched: after one
-manual cook, the cook, stow, and cook-again prompts complete on their own until
-the stack is done or the satchel is full.
+Cooking at a campfire is automated and batched: after one manual cook, the
+cook, stow, and cook-again prompts complete on their own, and each cooking
+animation produces up to 10 cooked items — every extra one paid for with a
+verified full ingredient set and stopped by satchel capacity.
 
 AutoCraft is always enabled and has no custom menu or keyboard shortcut. One
 inventory notification is shown for each batch.
