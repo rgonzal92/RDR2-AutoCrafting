@@ -109,13 +109,14 @@ namespace
 	// a promptless state), so automation must never act on a disabled prompt.
 	// Automation presses a cooking prompt only after it has been continuously
 	// enabled for this long AND the player ped is not mid scenario transition.
-	// Pacing uses the game clock directly because
-	// _UI_PROMPT_HAS_HOLD_MODE_COMPLETED proved unreliable in traces: it
-	// reported completion within two frames of a prompt's creation, which
-	// advanced the cooking flow faster than its animations and wedged the
-	// scenario transition. The transition gate targets that exact failure
-	// mechanism, which is what allows the dwell to be this short.
-	constexpr int kCookPressDelayMs = 1000;
+	// Do not shorten this: a 1000ms dwell wedged the cooking flow twice even
+	// with the transition gate — the fatal condition is starting the next cook
+	// while the ped is still IN the previous cooking pose, and no reliable
+	// native probe exists for "fully settled". 3800ms is the original mod's
+	// cadence and survived a full multi-stack session in traces. Pacing uses
+	// the game clock because _UI_PROMPT_HAS_HOLD_MODE_COMPLETED reported
+	// completion within two frames of a prompt's creation.
+	constexpr int kCookPressDelayMs = 3800;
 	constexpr int kMaxCookPrompts = 4;
 	struct CookPrompt
 	{
@@ -132,6 +133,10 @@ namespace
 	// for extra outputs inside the same animation.
 	constexpr int kCookBatchSize = 10;
 	constexpr int kMaxCookIngredients = 4;
+	// Fallback stack limit when no slot query yields a sane answer. Kept well
+	// below the standard 99 provision cap so the batch can never push an item
+	// into the refused-add boundary that wedges the cooking flow.
+	constexpr int kCookAssumedStackLimit = 90;
 	// Windows are wall-clock milliseconds from GET_GAME_TIMER. Frame counts
 	// scale with the player's frame rate and proved too short in traces: a
 	// paced cook-and-stow cycle outlived a frame-based window at high fps and
@@ -1052,6 +1057,13 @@ namespace
 			if (satchel_limit > 0 && satchel_limit >= after_count
 				&& (output_limit < 0 || satchel_limit < output_limit)) {
 				output_limit = satchel_limit;
+			}
+			if (output_limit < 0) {
+				// Some cooked items report nonsense limits from every slot query
+				// (traces showed 5 for an item empirically capped at 99). Assume
+				// a limit safely below the standard 99 provision cap rather than
+				// disabling batching for exactly the items cooked most.
+				output_limit = kCookAssumedStackLimit;
 			}
 
 			internal_inventory_op = true;
