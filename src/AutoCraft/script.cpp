@@ -591,6 +591,9 @@ namespace
 
 		const int before_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 			output_inventory_id, output_item, false);
+		// The previous grant's return value overwrote the first argument slot;
+		// restore it so the re-run sees its original arguments.
+		ctx->get_arg<int>(0) = output_inventory_id;
 		grant(ctx);
 		const int after_output = INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(
 			output_inventory_id, output_item, false);
@@ -666,12 +669,10 @@ namespace
 		// cook continues through cook/stow/cook-again without further input.
 		// This is the original upstream mod's mechanism with shorter times.
 		NHOOK("_UI_PROMPT_REGISTER_END", 0xF7AA2696A22AD8B9, {
+			const Prompt prompt = ctx->get_arg<Prompt>(0);
 			CALL();
-			if (IsCraftingScript()) {
-				const Prompt prompt = ctx->get_arg<Prompt>(0);
-				if (IsCookPrompt(prompt)) {
-					HUD::_UI_PROMPT_SET_HOLD_AUTO_FILL_MODE(prompt, kCookAutoFillMs, kCookHoldMs);
-				}
+			if (IsCraftingScript() && IsCookPrompt(prompt)) {
+				HUD::_UI_PROMPT_SET_HOLD_AUTO_FILL_MODE(prompt, kCookAutoFillMs, kCookHoldMs);
 			}
 		});
 
@@ -836,6 +837,7 @@ namespace
 
 			const int inventory_id = ctx->get_arg<int>(0);
 			const Hash item = ctx->get_arg<Hash>(3);
+			const Hash slot = ctx->get_arg<Hash>(4);
 			const int before_count =
 				INVENTORY::_INVENTORY_GET_INVENTORY_ITEM_COUNT_WITH_ITEMID(inventory_id, item, false);
 			CALL();
@@ -865,7 +867,6 @@ namespace
 				return;
 			}
 
-			const Hash slot = ctx->get_arg<Hash>(4);
 			const int granted_per_cook = after_count - before_count;
 			internal_inventory_op = true;
 			for (int extra = 1; extra < kCookBatchSize; ++extra) {
@@ -909,14 +910,18 @@ namespace
 		// Ammo recipes never read it, and no other call site exists in the two
 		// crafting scripts.
 		NHOOK("GET_ANIM_DURATION", 0x9FFAF4940A54CC09, {
-			CALL();
+			// The return value overwrites the first argument slot, so the string
+			// arguments must be read before the original runs.
+			bool shorten = false;
 			if (IsCraftingScript()) {
 				const char* anim_dict = ctx->get_arg<const char*>(0);
 				const char* anim_clip = ctx->get_arg<const char*>(1);
-				if (anim_dict != nullptr && anim_clip != nullptr
-					&& kItemCraftAnimDict == anim_dict && kItemCraftAnimClip == anim_clip) {
-					ctx->set_return_value(kItemCraftShortDuration);
-				}
+				shorten = anim_dict != nullptr && anim_clip != nullptr
+					&& kItemCraftAnimDict == anim_dict && kItemCraftAnimClip == anim_clip;
+			}
+			CALL();
+			if (shorten) {
+				ctx->set_return_value(kItemCraftShortDuration);
 			}
 		});
 
