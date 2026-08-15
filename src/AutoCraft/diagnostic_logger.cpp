@@ -79,6 +79,15 @@ bool diagnostic::Initialize()
 	}
 
 	const auto log_path = std::filesystem::path(module_path.data()).parent_path() / "AutoCraft-diagnostic.log";
+
+	// Keep exactly one previous session's log so evidence of a bug survives
+	// a game relaunch.
+	std::error_code rotate_error;
+	const auto previous_path =
+		std::filesystem::path(log_path).replace_extension(".prev.log");
+	std::filesystem::remove(previous_path, rotate_error);
+	std::filesystem::rename(log_path, previous_path, rotate_error);
+
 	log_stream.open(log_path, std::ios::out | std::ios::trunc);
 	if (!log_stream.is_open()) {
 		return false;
