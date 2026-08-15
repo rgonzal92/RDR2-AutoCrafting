@@ -107,11 +107,19 @@ namespace
 	// (the press-reading script function does not check it, and a cook started
 	// without ingredients both grants a free item and can wedge the player in
 	// a promptless state), so automation must never act on a disabled prompt.
+	// Automation presses a cooking prompt only after it has been continuously
+	// enabled for this long. Pacing uses the game clock directly because
+	// _UI_PROMPT_HAS_HOLD_MODE_COMPLETED proved unreliable in traces: it
+	// reported completion within two frames of a prompt's creation, which
+	// advanced the cooking flow faster than its animations and wedged the
+	// scenario transition.
+	constexpr int kCookPressDelayMs = 3800;
 	constexpr int kMaxCookPrompts = 4;
 	struct CookPrompt
 	{
 		Prompt handle;
 		bool enabled;
+		int enabled_since_ms;
 	};
 	CookPrompt cook_prompts[kMaxCookPrompts] = {};
 	int cook_prompt_cursor = 0;
@@ -469,7 +477,8 @@ namespace
 		std::optional<std::int64_t> owner = std::nullopt,
 		std::optional<std::uint32_t> subject = std::nullopt,
 		std::optional<int> quantity = std::nullopt,
-		std::optional<int> result = std::nullopt)
+		std::optional<int> result = std::nullopt,
+		std::string_view text = {})
 	{
 		diagnostic::Record record;
 		record.event = event;
@@ -479,6 +488,7 @@ namespace
 		record.subject_hash = subject;
 		record.quantity = quantity;
 		record.result = result;
+		record.text = text;
 		diagnostic::Write(record);
 	}
 #else
@@ -515,7 +525,8 @@ namespace
 		}
 		// The game enables a prompt as part of registering it; assume enabled
 		// until a _UI_PROMPT_SET_ENABLED call says otherwise.
-		cook_prompts[cook_prompt_cursor] = CookPrompt{prompt, true};
+		cook_prompts[cook_prompt_cursor] =
+			CookPrompt{prompt, true, MISC::GET_GAME_TIMER()};
 		cook_prompt_cursor = (cook_prompt_cursor + 1) % kMaxCookPrompts;
 	}
 
@@ -528,11 +539,24 @@ namespace
 		}
 	}
 
-	/** Returns whether automation may act on this cooking prompt right now. */
-	bool IsActiveCookPrompt(Prompt prompt)
+	/**
+	 * Returns whether automation may press this cooking prompt right now: the
+	 * game must have it enabled, and it must have stayed enabled for the full
+	 * dwell time so the flow advances no faster than a patient player.
+	 * Pressing resets the dwell so a prompt is never pressed twice in a burst.
+	 */
+	bool TryConsumeCookPress(Prompt prompt)
 	{
-		const CookPrompt* tracked = FindCookPrompt(prompt);
-		return tracked != nullptr && tracked->enabled;
+		CookPrompt* tracked = FindCookPrompt(prompt);
+		if (tracked == nullptr || !tracked->enabled) {
+			return false;
+		}
+		const int now_ms = MISC::GET_GAME_TIMER();
+		if (now_ms - tracked->enabled_since_ms < kCookPressDelayMs) {
+			return false;
+		}
+		tracked->enabled_since_ms = now_ms;
+		return true;
 	}
 
 	/** Resets transient batch state after RDR2 completes or rejects a craft. */
@@ -696,7 +720,7 @@ namespace
 						tracked_crafting_prompt = prompt;
 						tracked_prompt_is_make = true;
 						ForgetCookPrompt(prompt);
-						Trace("TRACK_MAKE", prompt);
+						Trace("TRACK_MAKE", prompt, std::nullopt, std::nullopt, std::nullopt, text);
 					}
 					else if (text == "CAMP_REC_COOK" || text == "CAMP_REC_BREW") {
 						// Cook/brew recipes relabel the same menu prompt and route
@@ -713,7 +737,7 @@ namespace
 							tracked_prompt_is_make = false;
 						}
 						convert_cook_prompt = true;
-						Trace("TRACK_COOK", prompt);
+						Trace("TRACK_COOK", prompt, std::nullopt, std::nullopt, std::nullopt, text);
 					}
 					else {
 						// The game deletes and recreates prompts freely, so a
@@ -760,6 +784,9 @@ namespace
 				}
 				if (CookPrompt* cook_prompt = FindCookPrompt(prompt); cook_prompt != nullptr) {
 					Trace("COOK_ENABLED", prompt, std::nullopt, std::nullopt, enabled ? 1 : 0);
+					if (enabled && !cook_prompt->enabled) {
+						cook_prompt->enabled_since_ms = MISC::GET_GAME_TIMER();
+					}
 					cook_prompt->enabled = enabled;
 				}
 			}
@@ -775,14 +802,13 @@ namespace
 
 			const bool pressed = *ctx->get_return_value<BOOL>() != 0;
 
-			// Cooking flow: report a completed self-filling hold as a press so
-			// the script advances through cook, stow, and cook-again on its own.
-			// Only for prompts the game currently has enabled: a disabled
+			// Cooking flow: press the prompt for the player after its dwell time
+			// so the script advances through cook, stow, and cook-again on its
+			// own. Only for prompts the game currently has enabled: a disabled
 			// cook-again prompt is the game's sole out-of-ingredients guard, and
 			// pressing through it starts an unpayable cook that grants a free
 			// item and can wedge the player in a promptless cooking state.
-			if (!pressed && IsActiveCookPrompt(prompt)
-				&& HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt)) {
+			if (!pressed && TryConsumeCookPress(prompt)) {
 				Trace("COOK_PRESS", prompt);
 				ctx->set_return_value<BOOL>(true);
 				return;
@@ -1018,9 +1044,9 @@ namespace
 		NHOOK("_UI_PROMPT_IS_PRESSED", 0x21E60E230086697F, {
 			const Prompt prompt = ctx->get_arg<Prompt>(0);
 			CALL();
-			if (IsCraftingScript() && IsActiveCookPrompt(prompt)
-				&& *ctx->get_return_value<BOOL>() == 0
-				&& HUD::_UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt)) {
+			if (IsCraftingScript() && *ctx->get_return_value<BOOL>() == 0
+				&& TryConsumeCookPress(prompt)) {
+				Trace("COOK_PRESS", prompt);
 				ctx->set_return_value<BOOL>(true);
 			}
 		});
